@@ -147,6 +147,7 @@ bool _openslide_read_key_file(GKeyFile *key_file, const char *filename,
                               GError **err);
 
 /* fopen() wrapper which properly sets FD_CLOEXEC */
+OPENSLIDE_PUBLIC()
 FILE *_openslide_fopen(const char *path, const char *mode, GError **err);
 
 /* Parse string to double, returning NAN on failure.  Accept both comma
