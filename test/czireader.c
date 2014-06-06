@@ -20,7 +20,7 @@
 
 int main( int argc, const char **argv )
 {
-  printf( "Is big endian: %i\n", (int)IS_BIG_ENDIAN );
+  g_debug( "Is big endian: %i", (int)IS_BIG_ENDIAN );
   GError * err = NULL;
 
   //--------------------------------------------------------------------------
@@ -119,8 +119,8 @@ int main( int argc, const char **argv )
   // check options
   //--------------------------------------------------------------------------
   if( !filename ) {
-    printf( "Missing -i option.\n" );
-    return 1;
+    g_warning( "Missing -i option." );
+    return EXIT_FAILURE;
   }
 
   //--------------------------------------------------------------------------
@@ -139,7 +139,7 @@ int main( int argc, const char **argv )
       }
       return EXIT_FAILURE;
     }
-    SegmentHeader tmpsh;
+    czi_segment_header tmpsh;
     while( !feof( stream ) )
     {
       if( !readNextSegmentHeader( stream, &tmpsh, &err ) ) {
@@ -154,7 +154,7 @@ int main( int argc, const char **argv )
       }
       else
       {
-        printf( "%s\n", tmpsh.Id );
+        printf( "%s\n", tmpsh.id );
         if( !skipSegment( stream, &tmpsh, &err ) )
         {
           if( err != NULL ) {
@@ -189,18 +189,18 @@ int main( int argc, const char **argv )
       return EXIT_FAILURE;
     }
 
-    SegmentHeader             *Temporary      = NULL;
-    SegmentHeader             *SegHeadFile    = NULL;
-    SegmentHeader             *SegHeadDir     = NULL;
-    SegmentHeader             *SegHeadMeta    = NULL;
-    SegmentHeader             *SegHeadAttDir  = NULL;
-    FileHeader                *SegFileHeader  = NULL;
-    SubBlockDirectorySegment  *SegDirectory   = NULL;
-    MetadataSegment           *SegMetadata    = NULL;
+    czi_segment_header             *Temporary      = NULL;
+    czi_segment_header             *SegHeadFile    = NULL;
+    czi_segment_header             *SegHeadDir     = NULL;
+    czi_segment_header             *SegHeadMeta    = NULL;
+    czi_segment_header             *SegHeadAttDir  = NULL;
+    czi_file_header                *SegFileHeader  = NULL;
+    czi_subblock_directory_segment *SegDirectory   = NULL;
+    czi_metadata_segment           *SegMetadata    = NULL;
     while( !feof( stream ) )
     {
       if( !Temporary )
-        Temporary = (SegmentHeader*) calloc( 1, sizeof(SegmentHeader) );
+        Temporary = (czi_segment_header*) g_malloc0( sizeof(czi_segment_header) );
       if( !readNextSegmentHeader( stream, Temporary, &err ) )
       {
         if( err != NULL ) {
@@ -215,7 +215,7 @@ int main( int argc, const char **argv )
         fseeko( stream, 0, SEEK_END );
         break;
       }
-      if( !strcmp( Temporary->Id, CZI_SUBBLOCK ) )
+      if( !strcmp( Temporary->id, CZI_SUBBLOCK ) )
       {
         if( !skipSegment( stream, Temporary, &err ) )
         {
@@ -229,13 +229,13 @@ int main( int argc, const char **argv )
           return EXIT_FAILURE;
         }
       }
-      else if( !strcmp( Temporary->Id, CZI_FILE ) )
+      else if( !strcmp( Temporary->id, CZI_FILE ) )
       {
         if( readfileheader )
         {
           SegHeadFile = Temporary;
           Temporary = NULL;
-          SegFileHeader = (FileHeader*) calloc( 1, sizeof(FileHeader) );
+          SegFileHeader = (czi_file_header*) g_malloc0( sizeof(czi_file_header) );
           if( !readFileHeader( stream, SegFileHeader, &err ) )
           {
             if( err != NULL )
@@ -264,13 +264,13 @@ int main( int argc, const char **argv )
           }
         }
       }
-      else if( !strcmp( Temporary->Id, CZI_DIRECTORY ) )
+      else if( !strcmp( Temporary->id, CZI_DIRECTORY ) )
       {
         if( readdirectory )
         {
           SegHeadDir = Temporary;
           Temporary = NULL;
-          SegDirectory = (SubBlockDirectorySegment*) calloc( 1, sizeof(SubBlockDirectorySegment) );
+          SegDirectory = (czi_subblock_directory_segment*) g_malloc0( sizeof(czi_subblock_directory_segment) );
           if( !readSubBlockDirectorySegment( stream, SegDirectory, &err ) )
           {
             if( err != NULL )
@@ -299,13 +299,13 @@ int main( int argc, const char **argv )
           }
         }
       }
-      else if( !strcmp( Temporary->Id, CZI_METADATA ) )
+      else if( !strcmp( Temporary->id, CZI_METADATA ) )
       {
         if( readmetadata )
         {
           SegHeadMeta = Temporary;
           Temporary = NULL;
-          SegMetadata = (MetadataSegment*) calloc( 1, sizeof(MetadataSegment) );
+          SegMetadata = (czi_metadata_segment*) g_malloc0( sizeof(czi_metadata_segment) );
           if( !readMetadataSegment( stream, SegMetadata, &err ) )
           {
             if( err != NULL )
@@ -321,7 +321,7 @@ int main( int argc, const char **argv )
           if( printmetadata )
           {
             FILE * xmlstream = _openslide_fopen( xmlout, "w", NULL );
-            fwrite( SegMetadata->xmlBuf, sizeof(char), SegMetadata->XmlSize, xmlstream );
+            fwrite( SegMetadata->xml_buf, sizeof(char), SegMetadata->xml_size, xmlstream );
             fclose( xmlstream );
           }
         }
@@ -340,7 +340,7 @@ int main( int argc, const char **argv )
           }
         }
       }
-      else if( !strcmp( Temporary->Id, CZI_ATTDIR ) )
+      else if( !strcmp( Temporary->id, CZI_ATTDIR ) )
       {
         if( !skipSegment( stream, Temporary, &err ) )
         {
@@ -354,7 +354,7 @@ int main( int argc, const char **argv )
           return EXIT_FAILURE;
         }
       }
-      else if( !strcmp( Temporary->Id, CZI_ATTACH ) )
+      else if( !strcmp( Temporary->id, CZI_ATTACH ) )
       {
         if( !skipSegment( stream, Temporary, &err ) )
         {
@@ -368,7 +368,7 @@ int main( int argc, const char **argv )
           return EXIT_FAILURE;
         }
       }
-      else if( !strcmp( Temporary->Id, CZI_DELETED ) )
+      else if( !strcmp( Temporary->id, CZI_DELETED ) )
       {
         if( !skipSegment( stream, Temporary, &err ) )
         {
@@ -384,14 +384,14 @@ int main( int argc, const char **argv )
       }
       else
       {
-        printf( "!! Unknown id %s. There may have been a failure somwhere. Continue.\n", Temporary->Id );
+        g_warning( "!! Unknown id %s. There may have been a failure somewhere. Continue.", Temporary->id );
       }
     }
     fclose( stream );
 
     if( computedimensions )
     {
-      ListOf_ImageDescriptor * Descriptor = (ListOf_ImageDescriptor*) calloc( 1, sizeof(ListOf_ImageDescriptor) );
+      czi_list_of_image_descriptor * Descriptor = (czi_list_of_image_descriptor*) g_malloc0( sizeof(czi_list_of_image_descriptor) );
       computeDimensions( SegDirectory, Descriptor, maxblocks );
       if( printdimensions )
         printPyramids( Descriptor );
