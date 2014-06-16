@@ -27,7 +27,6 @@ src_libopenslide_la_SOURCES = \
 	src/openslide-decode-tiff.c \
 	src/openslide-decode-tifflike.c \
 	src/openslide-decode-xml.c \
-	src/openslide-decode-zisraw.c \
 	src/openslide-error.c \
 	src/openslide-grid.c \
 	src/openslide-hash.c \
@@ -72,8 +71,7 @@ src_libopenslide_la_LDFLAGS = -version-info 4:0:4 -no-undefined
 
 pkginclude_HEADERS = \
 	src/openslide.h \
-	src/openslide-features.h \
-	src/openslide-decode-zisraw.h
+	src/openslide-features.h
 
 noinst_HEADERS = \
 	src/openslide-cairo.h \
@@ -92,7 +90,7 @@ noinst_HEADERS = \
 
 
 noinst_PROGRAMS = test/test test/try_open test/parallel test/query \
-	test/extended test/czireader
+	test/extended
 noinst_SCRIPTS = test/driver
 CLEANFILES += test/driver
 EXTRA_DIST += test/driver.in
@@ -113,8 +111,8 @@ test_query_LDADD = src/libopenslide.la $(GLIB2_LIBS)
 test_extended_CPPFLAGS = $(GLIB2_CFLAGS) -I$(top_srcdir)/src
 test_extended_LDADD = src/libopenslide.la $(GLIB2_LIBS)
 
-test_czireader_CPPFLAGS = $(GLIB2_CFLAGS) -I$(top_srcdir)/src $(src_libopenslide_la_CPPFLAGS)
-test_czireader_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(src_libopenslide_la_LIBADD)
+# test_czireader_CPPFLAGS = $(src_libopenslide_la_CPPFLAGS)
+# test_czireader_LDADD = src/libopenslide.la $(src_libopenslide_la_LIBADD)
 
 test/driver: test/driver.in Makefile
 	$(AM_V_GEN)sed -e 's:!!SRCDIR!!:$(abs_srcdir)/test:g' \
