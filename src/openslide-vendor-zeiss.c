@@ -45,12 +45,12 @@
 //--- extern -----------------------------------------------------------------
 // specify which is needed for ZISRAW ".h", ZISRAW ".c", ZEISS ".c"
 #include <glib.h>
-#include <stdint.h>
-#include <stdbool.h>
-#include <string.h>
-#include <stdio.h>
-#include <errno.h>
-#include <sys/types.h>
+#include <stdint.h>                                      // c99 int data types
+#include <stdbool.h>                                                   // bool
+#include <stdio.h>                                            // file handling
+#include <errno.h>                                      // file handling error
+#include <string.h>                                       // string comparison
+#include <sys/types.h>                                   // int MIN/MAX values
 //--- preprocessing stuff ----------------------------------------------------
 // change this
 #define CZI_ALIGNMENT      32
@@ -63,6 +63,20 @@
 #define CZI_ATTACH         "ZISRAWATTACH"
 #define CZI_ATTDIR         "ZISRAWATTDIR"
 #define CZI_DELETED        "DELETED"
+
+#define TRY_READ_ITEMS( buf, count, size, stream, err, prefix )              \
+  if( !read_items( (void*)buf, count, size, stream, err ) ) {                \
+    if( prefix ) g_prefix_error( err, prefix );                              \
+    return false;                                                            \
+  } else (void)0
+
+#define TRY_FSEEKO( stream, offset, flag, err, prefix )                      \
+  if( fseeko( stream, offset, flag ) ) {                                     \
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,               \
+    "Failed to move in file: %s", strerror( errno ) );                       \
+    if( prefix ) g_prefix_error( err, prefix );                              \
+    return false;                                                            \
+  } else (void)0
 //----------------------------------------------------------------------------
 
 // key:PARSING-TOP
@@ -167,10 +181,10 @@ static bool _openslide_czi_has_data_cameraspec( _openslide_czi * czi );
 static bool _openslide_czi_has_data_systemspec( _openslide_czi * czi );
 
 // Tiles
-static int32_t   _openslide_czi_get_level_count( _openslide_czi * czi, GError **err );
-static GList   * _openslide_czi_get_level_tiles( _openslide_czi * czi, GError **err );
-static uint8_t * _openslide_czi_load_tile( _openslide_czi * czi, char * guid, GError **err );
-static void      _openslide_czi_destroy_tile( _openslide_czi * czi, char * guid, GError **err );
+/*TODO*/static int32_t   _openslide_czi_get_level_count( _openslide_czi * czi, GError **err );
+/*TODO*/static GList   * _openslide_czi_get_level_tiles( _openslide_czi * czi, GError **err );
+/*TODO*/static uint8_t * _openslide_czi_load_tile( _openslide_czi * czi, const char * guid, GError **err );
+/*TODO*/static void      _openslide_czi_destroy_tile( _openslide_czi * czi, const char * guid, GError **err );
 
 // Metadata
 // There is one metadata block per file. In the multi-file case, I guess 
@@ -178,16 +192,16 @@ static void      _openslide_czi_destroy_tile( _openslide_czi * czi, char * guid,
 // Still, we give the possibility to choose which metadata block to load.
 // In all cases at least one metadata block is present, so calling the 
 // load method with index 0 should always return something.
-static int32_t   _openslide_czi_get_metadata_count( _openslide_czi * czi, GError **err );
-static uint8_t * _openslide_czi_load_metadata( _openslide_czi * czi, int32_t index, GError **err );
-static void      _openslide_czi_destroy_metadata( _openslide_czi * czi, int32_t index ); // Or have the user do it ?
+/*TODO*/static int32_t   _openslide_czi_get_metadata_count( _openslide_czi * czi, GError **err );
+/*TODO*/static uint8_t * _openslide_czi_load_metadata( _openslide_czi * czi, int32_t index, GError **err );
+/*TODO*/static void      _openslide_czi_destroy_metadata( _openslide_czi * czi, int32_t index ); // Or have the user do it ?
 
 // Attachments
 // If a null pointer is returned along with no error, it means that the 
 // attachment is not stored in the file
-static _openslide_czi * _openslide_czi_decode_label( _openslide_czi * czi, GError **err );
-static _openslide_czi * _openslide_czi_decode_prescan( _openslide_czi * czi, GError **err );
-static _openslide_czi * _openslide_czi_decode_slide_preview( _openslide_czi * czi, GError **err );
+/*TODO*/static _openslide_czi * _openslide_czi_decode_label( _openslide_czi * czi, GError **err );
+/*TODO*/static _openslide_czi * _openslide_czi_decode_prescan( _openslide_czi * czi, GError **err );
+/*TODO*/static _openslide_czi * _openslide_czi_decode_slide_preview( _openslide_czi * czi, GError **err );
 
 // Free
 // We give functions to free -openslide_czi structure,
@@ -289,7 +303,7 @@ struct _czi_tile {                    // subblock_segment + directory_entry_dv
   struct _czi_source    * source;                             // not owned (?)
   int32_t                 file_part;     // could be used in multi file case ?
   int64_t                 tile_offset;
-  uint8_t                 guid[16];
+  char                    uid[9];
   enum czi_pixel_t        pixel_type;
   enum czi_compression_t  compression;
   enum czi_pyramid_t      pyramid_type;
@@ -305,7 +319,7 @@ struct _czi_tile {                    // subblock_segment + directory_entry_dv
 
 struct _czi_dimension {                                  // dimension_entry_dv
   struct _czi_tile * tile;
-  char               dimension_id[4];
+  char               dimension_id[5];
   int32_t            start;
   int32_t            size;
   float              start_coordinate;
@@ -384,22 +398,28 @@ static bool do_byte_swap(
 // Byte swapping is applied when G_BYTE_ORDER == G_BIG_ENDIAN is true, 
 // since data in a CZI file are stored in little endian.
 static bool read_items(
-  uint8_t  * items,    // Pointer to memory block to process
+  void     * items,    // Pointer to memory block to process
   uint64_t   count,    // Number of items in the array
   size_t     size,     // Size of one item
-  FILE     * stream    // File stream
+  FILE     * stream,   // File stream,
+  GError  ** err       // Error handling
 );
 
 //--- read _czi --------------------------------------------------------------
 static bool czi_find_sources( const char * filename, struct _czi * czi, GError ** err );
 static bool czi_decode_one_stream( struct _czi_source * source, struct _czi * czi, GError ** err );
-/*TODO*/ static bool czi_add_tile( struct _czi * czi, struct _czi_tile * tile, int32_t ss_x, int32_t ss_y, GError ** err );
+static bool czi_add_tile( struct _czi * czi, struct _czi_tile * tile, int32_t ss_x, int32_t ss_y, GError ** err );
 
 //--- new --------------------------------------------------------------------
 static struct _czi             * czi_new( GError ** err );
+static struct _czi_source      * czi_new_source( GError ** err );
 static struct _czi_file_header * czi_new_file_header( struct _czi * czi, GError ** err );
+static struct _czi_level       * czi_new_level( struct _czi * czi, GError ** err);
 static struct _czi_metadata    * czi_new_metadata( struct _czi * czi, GError ** err );
-/*TODO*/ static struct _czi_tile        * czi_new_tile( GError ** err );
+/*TODO*/static struct _czi_attachment  * czi_new_attachment( struct _czi * czi, GError ** err );
+static struct _czi_tile        * czi_new_tile( GError ** err );
+static struct _czi_dimension   * czi_new_dimension( struct _czi_tile * tile, GError ** err );
+static int32_t                 * czi_new_S32( int32_t integer, GError ** err );
 
 //--- free -------------------------------------------------------------------
 static void czi_free(              struct _czi              * ptr );
@@ -408,15 +428,17 @@ static void czi_free_file_header(  struct _czi_file_header  * ptr );
 static void czi_free_level(        struct _czi_level        * ptr );
 static void czi_free_metadata(     struct _czi_metadata     * ptr );
 static void czi_free_attachment(   struct _czi_attachment   * ptr );
-/*TODO*/ static void czi_free_tile(         struct _czi_tile         * ptr );
+static void czi_free_tile(         struct _czi_tile         * ptr );
+static void czi_free_dimension(    struct _czi_dimension    * ptr );
+static void czi_free_S32(          int32_t                  * ptr );
 
 //--- read -------------------------------------------------------------------
 static bool czi_parse_directory(  struct _czi_source * source, struct _czi * czi,                     GError ** err );
-/*TODO*/ static bool czi_parse_attdir(     struct _czi_source * source, struct _czi * czi,                     GError ** err );
+/*TODO*/static bool czi_parse_attdir(     struct _czi_source * source, struct _czi * czi,                     GError ** err );
 static bool czi_read_file_header( struct _czi_source * source, struct _czi_file_header * file_header, GError ** err );
 static bool czi_read_metadata(    struct _czi_source * source, struct _czi_metadata * metadata,       GError ** err );
-/*TODO*/ static bool czi_read_tile(        struct _czi_source * source, struct _czi_tile * tile,               GError ** err );
-/*TODO*/ static bool czi_read_dimension(   struct _czi_source * source, struct _czi_dimension * dimension,     GError ** err );
+static bool czi_read_tile(        struct _czi_source * source, struct _czi_tile * tile,               GError ** err );
+static bool czi_read_dimension(   struct _czi_source * source, struct _czi_dimension * dimension,     GError ** err );
 
 //--- navigate in structure --------------------------------------------------
 static bool czi_read_next_segment_header(
@@ -439,12 +461,6 @@ static bool czi_is_zisraw(
   FILE                        * stream,
   GError                     ** err
 );
-
-//--- print ------------------------------------------------------------------
-// Converts a GUID to a printable string of format 4-2-2-2-6
-// The returned string needs to be freed outside.
-// - guid: An array of 16 bytes containing the guid.
-static char * guid_to_string( uint8_t * guid );
 
 // key:PARSING-PUB-DEF
 //============================================================================
@@ -477,18 +493,29 @@ bool do_byte_swap(
 }
 
 bool read_items(
-  uint8_t  * items,
+  void     * items,
   uint64_t   count,
   size_t     size,
-  FILE     * stream
+  FILE     * stream,
+  GError  ** err
 )
 {
   g_assert( stream );
   uint64_t len;
-  len = fread( (void*)items, size, count, stream );
-  if( len != count )
-    g_error( "(%s:%d:%s): Could only read %li out of %li items.",
-             __FILE__, __LINE__, __func__, len, count );
+  len = fread( items, size, count, stream );
+  if( len != count ) {
+    char * out;
+    if( feof(stream) )
+      out = "reached end of file";
+    else if( ferror(stream) )
+      out = strerror( errno );
+    else
+      out = "unknown error";
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Could only read %li out of %li items: %s",
+                 len, count, out );
+    return false;
+  }
   if( G_BYTE_ORDER == G_BIG_ENDIAN ) do_byte_swap( items, len, size );
   return true;
 }
@@ -497,20 +524,24 @@ bool read_items(
 //   READ CZI
 //============================================================================
 
-
-bool czi_find_sources( const char * filename, struct _czi * czi, GError ** err )
+bool czi_find_sources(
+  const char   * filename,
+  struct _czi  * czi,
+  GError      ** err
+)
 {
+  g_debug( "czi_find_sources" );
   g_assert( filename );
   g_assert( czi );
   struct _czi_source * source;
 
-  // Add master file
-  g_ptr_array_add( czi->sources, g_slice_alloc0( sizeof(struct _czi_source) ) );
-  source = (struct _czi_source *) g_ptr_array_index( czi->sources, 0 );
+  source = czi_new_source( err );
+  if( !source ) return false;
+  g_ptr_array_add( czi->sources, source );
   source->filename = (char*) g_strdup( filename );
   source->begin = 0;
   source->size = 0;
-  source->stream = _openslide_fopen( filename, "wb", err );
+  source->stream = _openslide_fopen( filename, "rb", err );
   if( !source->stream ) return false;
 
   // Look for eventual part files
@@ -520,12 +551,13 @@ bool czi_find_sources( const char * filename, struct _czi * czi, GError ** err )
   while( g_file_test( partname, G_FILE_TEST_EXISTS ) )
   {
     g_debug( "Found part file %s", partname );
-    g_ptr_array_add( czi->sources, g_slice_alloc0( sizeof(struct _czi_source) ) );
-    source = (struct _czi_source*) g_ptr_array_index( czi->sources, i );
+    source = czi_new_source( err );
+    if( !source ) return false;
+    g_ptr_array_add( czi->sources, source );
     source->filename = partname;
     source->begin = 0;
     source->size = 0;
-    source->stream = _openslide_fopen( partname, "wb", err );
+    source->stream = _openslide_fopen( partname, "rb", err );
     if( !source->stream ) {
       g_free( base );
       return false;
@@ -537,8 +569,13 @@ bool czi_find_sources( const char * filename, struct _czi * czi, GError ** err )
   return true;
 }
 
-bool czi_decode_one_stream( struct _czi_source * source, struct _czi * czi, GError ** err )
+bool czi_decode_one_stream(
+  struct _czi_source  * source,
+  struct _czi         * czi,
+  GError             ** err
+)
 {
+  g_debug( "czi_decode_one_stream" );
   g_assert( source );
   g_assert( czi );
 
@@ -567,15 +604,14 @@ bool czi_decode_one_stream( struct _czi_source * source, struct _czi * czi, GErr
 
   int64_t position = ftello( source->stream );
   int64_t position_max = source->begin + source->size;
-  bool check_position = source->size > 0;
+  bool check_position = ( source->size > 0 );
   struct _czi_segment_header * header = (struct _czi_segment_header*) g_malloc0( sizeof(struct _czi_segment_header) );
   while( !feof( source->stream ) && (!check_position || position < position_max ) )
   {
     if( !czi_read_next_segment_header( source, header, err ) ) {
       // we assume it is because there are no segments left
       g_free( header );
-      g_error_free( *err );
-      g_free( err );
+      g_clear_error( err );
       err = NULL;
       break;
     }
@@ -638,14 +674,65 @@ bool czi_decode_one_stream( struct _czi_source * source, struct _czi * czi, GErr
 }
 
 bool czi_add_tile(
-  struct _czi       * czi   G_GNUC_UNUSED,
-  struct _czi_tile  * tile  G_GNUC_UNUSED,
-  int32_t             ss_x  G_GNUC_UNUSED,
-  int32_t             ss_y  G_GNUC_UNUSED,
-  GError           ** err   G_GNUC_UNUSED
+  struct _czi       * czi,
+  struct _czi_tile  * tile,
+  int32_t             ss_x,
+  int32_t             ss_y,
+  GError           ** err
 )
 {
-  // TODO
+  g_assert( czi );
+  g_assert( tile );
+  struct _czi_level * level;
+  gpointer has_key;
+  GList * list_keys, * current_key;
+  int32_t start, size;
+  int32_t * cur_start, * cur_size;
+
+  for( uint32_t i=0; i < czi->levels->len; ++i )
+  {
+    level = (struct _czi_level*) g_ptr_array_index( czi->levels, i );
+    if( level->subsampling_x == ss_x && level->subsampling_y == ss_y )
+      break;
+    else
+      level = NULL;
+  }
+
+  if( !level ) {
+    level = czi_new_level( czi, err );
+    if( !level ) return false;
+    level->pixel_type    = tile->pixel_type;
+    level->compression   = tile->compression;
+    level->pyramid_type  = tile->pyramid_type;
+    level->subsampling_x = ss_x;
+    level->subsampling_y = ss_y;
+  }
+
+  g_hash_table_insert( level->tiles, g_strdup( (char*)tile->uid ), tile );
+  list_keys = g_hash_table_get_keys( tile->dimensions );
+  current_key = list_keys;
+  while( current_key )
+  {
+    start = ((struct _czi_dimension*)g_hash_table_lookup( tile->dimensions, (char*) current_key->data ))->start;
+    size  = ((struct _czi_dimension*)g_hash_table_lookup( tile->dimensions, (char*) current_key->data ))->size;
+    has_key = g_hash_table_lookup( level->size, (char*) current_key->data );
+    if( !has_key ) {
+      cur_size = czi_new_S32( size, err );
+      if( !cur_size ) return false;
+      g_hash_table_insert( level->size, g_strdup( (char*)current_key->data ), cur_size );
+      cur_start = czi_new_S32( start, err );
+      if( !cur_start ) return false;
+      g_hash_table_insert( level->start, g_strdup( (char*)current_key->data ), cur_start);
+    } else {
+      cur_start = (int32_t*) g_hash_table_lookup( level->start, (char*) current_key->data );
+      cur_size  = (int32_t*) g_hash_table_lookup( level->size, (char*) current_key->data );
+      if( start < *cur_start ) *cur_start = start;
+      if( ( start + size - *cur_start ) > *cur_size ) *cur_size = (start + size - *cur_start);
+    }
+    current_key = g_list_next( current_key );
+  }
+
+  g_list_free( list_keys );
   return true;
 }
 
@@ -810,13 +897,13 @@ bool czi_skip_segment(
 
 bool czi_is_zisraw( FILE * stream, GError ** err )
 {
+  g_debug( "czi_is_zisraw" );
   g_assert( stream );
   int64_t pos = ftello( stream );
 
   char magic_string[16];
-  if( !read_items( (uint8_t*)magic_string, 16, 1, stream ) ) {
-    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                 "Failed to read in stream" );
+  if( !read_items( (void*)magic_string, 16, 1, stream, err ) ) {
+    g_prefix_error( err, "Failed to read magic string: " );
     fseeko( stream, pos, SEEK_SET );
     return false;
   }
@@ -857,12 +944,53 @@ struct _czi * czi_new( GError ** err )
 
   if( !czi->sources  || ! czi->file_headers || !czi->levels ||
       !czi->metadata /*|| !czi->attachments*/ ) {
+    czi_free( czi );
     g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                  "Failed to initiate _czi structure" );
     return NULL;
   }
 
   return czi;
+}
+
+struct _czi_source * czi_new_source( GError ** err )
+{
+  struct _czi_source * source = (struct _czi_source*) g_slice_alloc0( sizeof(struct _czi_source) );
+  if( !source ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to allocate %ld bytes", sizeof(struct _czi_source) );
+    return NULL;
+  }
+  return source;
+}
+
+struct _czi_level * czi_new_level( struct _czi * czi, GError ** err )
+{
+  g_assert( czi );
+
+  struct _czi_level * level = (struct _czi_level*) g_slice_alloc0( sizeof(struct _czi_level) );
+  if( !level ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to allocate %ld bytes", sizeof(struct _czi_level) );
+    return NULL;
+  }
+
+  level->size = g_hash_table_new_full( &g_str_hash, &g_str_equal,
+                &g_free, (void(*)(gpointer)) &czi_free_S32 );
+  level->start = g_hash_table_new_full( &g_str_hash, &g_str_equal,
+                 &g_free, (void(*)(gpointer)) &czi_free_S32 );
+  level->tiles = g_hash_table_new_full( &g_str_hash, &g_str_equal,
+                 &g_free, &g_free );
+
+  if( !level->size  || !level->start || !level->tiles ) {
+    czi_free_level( level );
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to initiate _czi_level structure" );
+    return NULL;
+  }
+
+  level->czi = czi;
+  return level;
 }
 
 struct _czi_file_header * czi_new_file_header( struct _czi * czi, GError ** err )
@@ -893,10 +1021,61 @@ struct _czi_metadata * czi_new_metadata( struct _czi * czi, GError ** err )
   return metadata;
 }
 
-struct _czi_tile * czi_new_tile( GError ** err G_GNUC_UNUSED )
+struct _czi_attachment * czi_new_attachment(
+  struct _czi * czi G_GNUC_UNUSED,
+  GError ** err     G_GNUC_UNUSED
+)
 {
-  // TODO
+  /*TODO*/
   return NULL;
+}
+
+struct _czi_tile * czi_new_tile( GError ** err )
+{
+  struct _czi_tile * tile = (struct _czi_tile*) g_slice_alloc0( sizeof(struct _czi_tile) );
+  if( !tile ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to allocate %ld bytes", sizeof(struct _czi_tile) );
+    return NULL;
+  }
+
+  tile->dimensions = g_hash_table_new_full( &g_str_hash, &g_str_equal,
+                      &g_free, (void(*)(gpointer)) &czi_free_dimension );
+  if( !tile->dimensions ) {
+    g_slice_free1( sizeof(struct _czi_tile), tile );
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to initiate _czi_tile structure" );
+    return NULL;
+  }
+
+  return tile;
+}
+
+struct _czi_dimension * czi_new_dimension( struct _czi_tile * tile, GError ** err )
+{
+  g_assert( tile );
+
+  struct _czi_dimension * dimension = (struct _czi_dimension*) g_slice_alloc0( sizeof(struct _czi_dimension) );
+  if( !dimension ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to allocate %ld bytes", sizeof(struct _czi_dimension) );
+    return NULL;
+  }
+  dimension->tile = tile;
+  dimension->dimension_id[4] = '\0';
+  return dimension;
+}
+
+int32_t * czi_new_S32( int32_t integer, GError ** err )
+{
+  int32_t * value = (int32_t*) g_slice_alloc0( sizeof(int32_t) );
+  if( !value ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to allocate %ld bytes", sizeof(int32_t) );
+    return NULL;
+  }
+  *value = integer;
+  return value;
 }
 
 //============================================================================
@@ -934,7 +1113,7 @@ void czi_free_level( struct _czi_level * ptr )
   if( ptr ) {
     if( ptr->size )       g_hash_table_destroy( ptr->size );
     if( ptr->start )      g_hash_table_destroy( ptr->start );
-    if( ptr->tiles )       g_hash_table_destroy( ptr->tiles );
+    if( ptr->tiles )      g_hash_table_destroy( ptr->tiles );
     g_slice_free1( sizeof(struct _czi_source), ptr );
   }
 }
@@ -949,10 +1128,23 @@ void czi_free_attachment( struct _czi_attachment * ptr )
   if( ptr ) g_slice_free1( sizeof(struct _czi_attachment), ptr );
 }
 
-void czi_free_tile( struct _czi_tile * ptr G_GNUC_UNUSED )
+void czi_free_tile( struct _czi_tile * ptr )
 {
-  // TODO
+  if( ptr ) {
+    if( ptr->dimensions )  g_hash_table_destroy( ptr->dimensions );
+    g_slice_free1( sizeof(struct _czi_tile), ptr );
+  }
   return;
+}
+
+void czi_free_dimension( struct _czi_dimension * ptr )
+{
+  if( ptr ) g_slice_free1( sizeof(struct _czi_dimension), ptr );
+}
+
+void czi_free_S32( int32_t * ptr )
+{
+  if( ptr ) g_slice_free1( sizeof(int32_t), ptr );
 }
 
 //============================================================================
@@ -969,14 +1161,15 @@ bool czi_parse_directory(
   g_assert( source->stream );
   g_assert( czi );
 
-  FILE * stream = stream;
+  FILE * stream = source->stream;
   int32_t entry_count;
-  int32_t ss_x;
-  int32_t ss_y;
+  int32_t ss_x, ss_y;
+  int32_t   val_S32;
+  int32_t * ptr_S32;
   struct _czi_tile * new_tile = NULL;
   struct _czi_dimension * dim;
 
-  read_items( (uint8_t*)&entry_count, 1, sizeof(entry_count), stream );
+  TRY_READ_ITEMS( &entry_count, 1, sizeof(entry_count), stream, err, "Failed to parse directory: " );
   fseeko( stream, 124, SEEK_CUR );                       // 124 bytes reserved
 
   for( int32_t i=0; i<entry_count; ++i )
@@ -987,22 +1180,32 @@ bool czi_parse_directory(
       czi_free_tile( new_tile );
       return false;
     }
-    if( !g_hash_table_contains( new_tile->dimensions, "X" ) ) {
+    new_tile->uid[8] = '\0';
+
+    dim = (struct _czi_dimension*) g_hash_table_lookup( new_tile->dimensions, "X" );
+    if( !dim ) {
       g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                  "Tile without X dimension." );
       czi_free_tile( new_tile );
       return false;
     }
-    dim = g_hash_table_lookup( new_tile->dimensions, "X" );
     ss_x = dim->size / dim->stored_size;
-    if( !g_hash_table_contains( new_tile->dimensions, "Y" ) ) {
+    val_S32 = dim->start;
+    ptr_S32 = (int32_t*) new_tile->uid;
+    *ptr_S32 = val_S32;
+
+    dim = (struct _czi_dimension*) g_hash_table_lookup( new_tile->dimensions, "Y" );
+    if( !dim ) {
       g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                 "Tile without X dimension." );
+                 "Tile without Y dimension." );
       czi_free_tile( new_tile );
       return false;
     }
-    dim = g_hash_table_lookup( new_tile->dimensions, "Y" );
     ss_y = dim->size / dim->stored_size;
+    val_S32 = dim->start;
+    ptr_S32 = (int32_t*) (new_tile->uid+4);
+    *ptr_S32 = val_S32;
+
     if( !czi_add_tile( czi, new_tile, ss_x, ss_y, err ) ) {
       czi_free_tile( new_tile );
       return false;
@@ -1032,23 +1235,22 @@ bool czi_read_file_header(
   g_assert( source );
   g_assert( source->stream );
   g_assert( file_header );
-  g_return_val_if_fail( err == NULL || *err == NULL, false );
 
   file_header->source = source;
   FILE * stream = source->stream;
   int32_t update_pending;
 
-  read_items( (uint8_t*)&(file_header->major),              1, sizeof(file_header->major), stream );
-  read_items( (uint8_t*)&(file_header->minor),              1, sizeof(file_header->minor), stream );
-  fseeko( stream, 8, SEEK_CUR );                             // 2 int reserved
-  read_items( (uint8_t*)file_header->primary_file_guid,    16, sizeof(file_header->primary_file_guid[0]), stream );
-  read_items( (uint8_t*)file_header->file_guid,            16, sizeof(file_header->file_guid[0]), stream );
-  read_items( (uint8_t*)&(file_header->file_part),          1, sizeof(file_header->file_part), stream );
-  read_items( (uint8_t*)&(file_header->directory_position), 1, sizeof(file_header->directory_position), stream );
-  read_items( (uint8_t*)&(file_header->metadata_position),  1, sizeof(file_header->metadata_position), stream );
-  read_items( (uint8_t*)&(update_pending),                  1, sizeof(update_pending), stream );
+  TRY_READ_ITEMS( &(file_header->major),              1, 4, stream, err, "Failed to read file header: " );
+  TRY_READ_ITEMS( &(file_header->minor),              1, 4, stream, err, "Failed to read file header: " );
+  TRY_FSEEKO( stream, 8, SEEK_CUR, err, "Failed to read file header: " ); // 2 int reserved
+  TRY_READ_ITEMS( file_header->primary_file_guid,    16, 1, stream, err, "Failed to read file header: " );
+  TRY_READ_ITEMS( file_header->file_guid,            16, 1, stream, err, "Failed to read file header: " );
+  TRY_READ_ITEMS( &(file_header->file_part),          1, 4, stream, err, "Failed to read file header: " );
+  TRY_READ_ITEMS( &(file_header->directory_position), 1, 8, stream, err, "Failed to read file header: " );
+  TRY_READ_ITEMS( &(file_header->metadata_position),  1, 8, stream, err, "Failed to read file header: " );
+  TRY_READ_ITEMS( &(update_pending),                  1, 4, stream, err, "Failed to read file header: " );
   file_header->update_pending = (bool) update_pending;
-  read_items( (uint8_t*)&(file_header->attdir_position),    1, sizeof(file_header->attdir_position), stream );
+  TRY_READ_ITEMS( &(file_header->attdir_position),    1, 8, stream, err, "Failed to read file header: " );
 
   return true;
 }
@@ -1062,36 +1264,77 @@ bool czi_read_metadata(
   g_assert( source );
   g_assert( source->stream );
   g_assert( metadata );
-  g_return_val_if_fail( err == NULL || *err == NULL, false );
 
   metadata->source = source;
   FILE * stream = source->stream;
 
-  read_items( (uint8_t*)&(metadata->xml_size),        1, sizeof(metadata->xml_size), stream );
-  read_items( (uint8_t*)&(metadata->attachment_size), 1, sizeof(metadata->attachment_size), stream );
-  fseeko( stream, 248, SEEK_CUR );                           // end of segment
-  fseeko( stream, metadata->xml_size, SEEK_CUR );            // skip xml block
-  fseeko( stream, metadata->attachment_size, SEEK_CUR );     // skip att block
+  TRY_READ_ITEMS( &(metadata->xml_size),        1, 4, stream, err, "Failed to read metadata: " );
+  TRY_READ_ITEMS( &(metadata->attachment_size), 1, 4, stream, err, "Failed to read metadata: " );
+  TRY_FSEEKO( stream, 248,                       SEEK_CUR, err, "Failed to read metadata: " );  // end of segment
+  TRY_FSEEKO( stream, metadata->xml_size,        SEEK_CUR, err, "Failed to read metadata: " );  // skip xml block
+  TRY_FSEEKO( stream, metadata->attachment_size, SEEK_CUR, err, "Failed to read metadata: " );  // skip att block
   return true;
 }
 
 bool czi_read_tile(
-  struct _czi_source * source G_GNUC_UNUSED,
-  struct _czi_tile * tile     G_GNUC_UNUSED,
-  GError ** err               G_GNUC_UNUSED
+  struct _czi_source  * source,
+  struct _czi_tile    * tile,
+  GError             ** err
 )
 {
-  // TODO
+  g_assert( source );
+  g_assert( source->stream );
+  g_assert( tile );
+
+  tile->source = source;
+  FILE * stream = source->stream;
+  int8_t  val8;
+  int32_t val32;
+  int32_t dimension_count;
+
+  TRY_FSEEKO( stream, 2, SEEK_CUR, err, "Failed to read tile: " );                        // SchemaType
+  TRY_READ_ITEMS( &val32,               1, 4, stream, err, "Failed to read tile: " );      // PixelType
+  tile->pixel_type = (enum czi_pixel_t) val32;
+  TRY_READ_ITEMS( &(tile->tile_offset), 1, 8, stream, err, "Failed to read tile: " );
+  TRY_READ_ITEMS( &(tile->file_part),   1, 4, stream, err, "Failed to read tile: " );
+  TRY_READ_ITEMS( &val32, 1, sizeof(int32_t), stream, err, "Failed to read tile: " );    // Compression
+  tile->compression = (enum czi_compression_t) val32;
+  TRY_READ_ITEMS( &val8,                1, 1, stream, err, "Failed to read tile: " );    // PyramidType
+  tile->pyramid_type = (enum czi_pyramid_t) val8;
+  TRY_FSEEKO( stream, 5, SEEK_CUR, err, "Failed to read tile: " );                          // Reserved
+  TRY_READ_ITEMS( &dimension_count,     1, 4, stream, err, "Failed to read tile: " );
+
+  for( int32_t i=0; i<dimension_count; ++i )
+  {
+    struct _czi_dimension * new_dimension = czi_new_dimension( tile, err );
+    if( !czi_read_dimension( source, new_dimension, err ) ) {
+      czi_free_tile( tile );
+      return false;
+    }
+    g_hash_table_insert( tile->dimensions,
+      g_strndup( new_dimension->dimension_id, 1 ), new_dimension );
+  }
+
   return true;
 }
 
 bool czi_read_dimension(
-  struct _czi_source * source       G_GNUC_UNUSED,
-  struct _czi_dimension * dimension G_GNUC_UNUSED,
-  GError ** err                     G_GNUC_UNUSED
+  struct _czi_source     * source,
+  struct _czi_dimension  * dimension,
+  GError                ** err
 )
 {
-  // TODO
+  g_assert( source );
+  g_assert( source->stream );
+  g_assert( dimension );
+  FILE * stream = source->stream;
+
+  TRY_READ_ITEMS( dimension->dimension_id,        4, 1, stream, err, "Failed to read dimension: " );
+  TRY_READ_ITEMS( &(dimension->start),            1, 4, stream, err, "Failed to read dimension: " );
+  TRY_READ_ITEMS( &(dimension->size),             1, 4, stream, err, "Failed to read dimension: " );
+  TRY_READ_ITEMS( &(dimension->start_coordinate), 1, 4, stream, err, "Failed to read dimension: " );
+  TRY_READ_ITEMS( &(dimension->stored_size),      1, 4, stream, err, "Failed to read dimension: " );
+
   return true;
 }
 
@@ -1108,25 +1351,34 @@ bool _openslide_czi_is_zisraw( const char * filename, GError ** err )
   g_assert( filename );
 
   FILE * stream = _openslide_fopen( filename, "rb", err );
-  if( !stream ) return false;
-
-  if( czi_is_zisraw( stream, err ) )
-    return true;
-  else
+  if( !stream )
     return false;
+
+  if( czi_is_zisraw( stream, err ) ) {
+    fclose( stream );
+    return true;
+  } else {
+    fclose( stream );
+    return false;
+  }
 }
 
 //--- decode -----------------------------------------------------------------
 _openslide_czi * _openslide_czi_decode( const char * filename, GError ** err )
 {
+  g_debug( "_openslide_czi_decode" );
   g_assert( filename );
 
   _openslide_czi * czi = czi_new( err );
+  if( !czi )
+    return NULL;
 
   // TODO: look for multiple files
   // While not done: register one file
-  if( !czi_find_sources( filename, czi, err ) )
+  if( !czi_find_sources( filename, czi, err ) ) {
+    czi_free( czi );
     return NULL;
+  }
 
   // decode each file
   for( uint32_t i=0; i<czi->sources->len; ++i ) {
@@ -1152,13 +1404,13 @@ GList   * _openslide_czi_get_level_tiles( _openslide_czi * czi, GError **err )
   return NULL;
 }
 
-uint8_t * _openslide_czi_load_tile( _openslide_czi * czi, char * guid, GError **err )
+uint8_t * _openslide_czi_load_tile( _openslide_czi * czi, const char * guid, GError **err )
 {
   // TODO
   return NULL;
 }
 
-void _openslide_czi_destroy_tile( _openslide_czi * czi, char * guid, GError **err )
+void _openslide_czi_destroy_tile( _openslide_czi * czi, const char * guid, GError **err )
 {
   // TODO
   return;
@@ -1552,12 +1804,10 @@ bool zeiss_detect(
   GError                     ** err
 )
 {
+  g_debug( "zeiss_detect" );
   // ensure we have a zisraw file
-  if( !_openslide_czi_is_zisraw( filename, 0 /*err*/ ) ) {
-    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                 "Not a CZI file" );
+  if( !_openslide_czi_is_zisraw( filename, err ) )
     return false;
-  }
 
   // maybe check other things here ( xml, image encoding, ... )
 
@@ -1572,6 +1822,7 @@ bool zeiss_open(
   GError                     ** err
 )
 {
+  g_debug( "zeiss_open" );
   _openslide_czi * czi_descriptor = NULL;
   czi_descriptor = _openslide_czi_decode( filename, err );
   if( !czi_descriptor )
