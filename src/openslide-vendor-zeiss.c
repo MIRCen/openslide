@@ -51,32 +51,6 @@
 #include <errno.h>                                      // file handling error
 #include <string.h>                                       // string comparison
 #include <sys/types.h>                                   // int MIN/MAX values
-//--- preprocessing stuff ----------------------------------------------------
-// change this
-#define CZI_ALIGNMENT      32
-#define CZI_HEADER_SIZE    32
-// keep it this way of use const char * ?
-#define CZI_FILE           "ZISRAWFILE"
-#define CZI_DIRECTORY      "ZISRAWDIRECTORY"
-#define CZI_SUBBLOCK       "ZISRAWSUBBLOCK"
-#define CZI_METADATA       "ZISRAWMETADATA"
-#define CZI_ATTACH         "ZISRAWATTACH"
-#define CZI_ATTDIR         "ZISRAWATTDIR"
-#define CZI_DELETED        "DELETED"
-
-#define TRY_READ_ITEMS( buf, count, size, stream, err, prefix )              \
-  if( !read_items( (void*)buf, count, size, stream, err ) ) {                \
-    if( prefix ) g_prefix_error( err, prefix );                              \
-    return false;                                                            \
-  } else (void)0
-
-#define TRY_FSEEKO( stream, offset, flag, err, prefix )                      \
-  if( fseeko( stream, offset, flag ) ) {                                     \
-    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,               \
-    "Failed to move in file: %s", strerror( errno ) );                       \
-    if( prefix ) g_prefix_error( err, prefix );                              \
-    return false;                                                            \
-  } else (void)0
 //----------------------------------------------------------------------------
 
 // key:PARSING-TOP
@@ -141,14 +115,14 @@ typedef struct _czi _openslide_czi;
 // Made for the user to choose tiles to load.
 // Loading should be done using appropriate function
 struct _openslide_czi_tile_descriptor {
-  uint8_t                 guid[16];       // unique identifier to access tiles
+  int64_t                 uid;            // unique identifier to access tiles
   enum czi_pixel_t        pixel_type;     // pixel type on disk
   enum czi_compression_t  compression;    // data compression
   enum czi_pyramid_t      pyramid_type;   // subsampling type (none - one dir - two dir)
   int32_t                 subsampling_x;  // number of pixels aggregated in x direction
   int32_t                 subsampling_y;  // number of pixels aggregated in y direction
-  int32_t                 start_x;        // position of top-left pixel on the grid (pyr 0 referential)
-  int32_t                 start_y;        // position of top-left pixel on the grid (pyr 0 referential)
+  int32_t                 start_x;        // position of top-left pixel in global (pyr0) referential
+  int32_t                 start_y;        // position of top-left pixel in global (pyr0) referential
   int32_t                 size_x;         // size of the tile (pyr 0 referential)
   int32_t                 size_y;         // size of the tile (pyr 0 referential)
 };
@@ -163,6 +137,7 @@ static bool _openslide_czi_is_zisraw( const char * filename, GError ** err );
 // Setting of _openslide_czi structure
 // Everything is read except data blocks (tiles data, xml blocks, attachments data)
 static _openslide_czi * _openslide_czi_decode( const char * filename, GError ** err );
+static void _openslide_czi_free( _openslide_czi * czi );
 
 // A few precomputed characteristics to detect unsupported files
 static bool _openslide_czi_is_multi_view( _openslide_czi * czi );
@@ -173,18 +148,21 @@ static bool _openslide_czi_is_multi_rotation( _openslide_czi * czi );
 static bool _openslide_czi_is_multi_time( _openslide_czi * czi );
 static bool _openslide_czi_is_multi_zslice( _openslide_czi * czi );
 static bool _openslide_czi_is_multi_channel( _openslide_czi * czi );
-static bool _openslide_czi_has_data_uncompressed( _openslide_czi * czi );
-static bool _openslide_czi_has_data_jpg( _openslide_czi * czi );
+static bool _openslide_czi_has_data_uncompressed( _openslide_czi * czi ) G_GNUC_UNUSED;
+static bool _openslide_czi_has_data_jpg( _openslide_czi * czi ) G_GNUC_UNUSED;
 static bool _openslide_czi_has_data_jpgxr( _openslide_czi * czi );
 static bool _openslide_czi_has_data_lzw( _openslide_czi * czi );
 static bool _openslide_czi_has_data_cameraspec( _openslide_czi * czi );
 static bool _openslide_czi_has_data_systemspec( _openslide_czi * czi );
 
 // Tiles
-/*TODO*/static int32_t   _openslide_czi_get_level_count( _openslide_czi * czi, GError **err );
-/*TODO*/static GList   * _openslide_czi_get_level_tiles( _openslide_czi * czi, GError **err );
-/*TODO*/static uint8_t * _openslide_czi_load_tile( _openslide_czi * czi, const char * guid, GError **err );
-/*TODO*/static void      _openslide_czi_destroy_tile( _openslide_czi * czi, const char * guid, GError **err );
+static int32_t   _openslide_czi_get_level_count( _openslide_czi * czi );
+static int32_t   _openslide_czi_get_level_subsampling( _openslide_czi * czi, int32_t level, GError **err );
+static bool      _openslide_czi_get_level_tile_size( _openslide_czi * czi, int32_t level, int32_t * w, int32_t * h, GError ** err );
+static GList   * _openslide_czi_get_level_tiles( _openslide_czi * czi, int32_t level, GError **err );
+static void      _openslide_czi_free_list_tiles( GList * list );
+static uint8_t * _openslide_czi_load_tile( _openslide_czi * czi, int32_t level, int64_t uid, int32_t * buffer_size, GError **err );
+static bool      _openslide_czi_destroy_tile( _openslide_czi * czi, int32_t level, int64_t uid, GError **err );
 
 // Metadata
 // There is one metadata block per file. In the multi-file case, I guess 
@@ -192,9 +170,9 @@ static bool _openslide_czi_has_data_systemspec( _openslide_czi * czi );
 // Still, we give the possibility to choose which metadata block to load.
 // In all cases at least one metadata block is present, so calling the 
 // load method with index 0 should always return something.
-/*TODO*/static int32_t   _openslide_czi_get_metadata_count( _openslide_czi * czi, GError **err );
-/*TODO*/static uint8_t * _openslide_czi_load_metadata( _openslide_czi * czi, int32_t index, GError **err );
-/*TODO*/static void      _openslide_czi_destroy_metadata( _openslide_czi * czi, int32_t index ); // Or have the user do it ?
+static int32_t   _openslide_czi_get_metadata_count( _openslide_czi * czi );
+static char    * _openslide_czi_load_metadata( _openslide_czi * czi, int32_t index, int32_t * buffer_size, GError **err );
+static bool      _openslide_czi_destroy_metadata( _openslide_czi * czi, int32_t index, GError **err );
 
 // Attachments
 // If a null pointer is returned along with no error, it means that the 
@@ -203,19 +181,30 @@ static bool _openslide_czi_has_data_systemspec( _openslide_czi * czi );
 /*TODO*/static _openslide_czi * _openslide_czi_decode_prescan( _openslide_czi * czi, GError **err );
 /*TODO*/static _openslide_czi * _openslide_czi_decode_slide_preview( _openslide_czi * czi, GError **err );
 
-// Free
-// We give functions to free -openslide_czi structure,
-// GList[ _openslide_czi_tile_descriptor ] and any loaded buffer.
-// Buffers must be destroyed right after they are used : Freeing 
-// _openslide_czi won't destroy thoses buffers !
-static void _openslide_czi_free( _openslide_czi * czi );
-
 // key:PARSING-PRI-DECL
 //============================================================================
 //
 //               ZISRAW PARSING PRIVATE METHODS : DECLARATIONS
 //
 //============================================================================
+
+//============================================================================
+//   PRIVATE MACROS
+//============================================================================
+
+#define TRY_READ_ITEMS( buf, count, size, stream, err, prefix )              \
+  if( !read_items( (void*)buf, count, size, stream, err ) ) {                \
+    if( prefix ) g_prefix_error( err, prefix );                              \
+    return false;                                                            \
+  } else (void)0
+
+#define TRY_FSEEKO( stream, offset, flag, err, prefix )                      \
+  if( fseeko( stream, offset, flag ) ) {                                     \
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,               \
+    "Failed to move in file: %s", strerror( errno ) );                       \
+    if( prefix ) g_prefix_error( err, prefix );                              \
+    return false;                                                            \
+  } else (void)0
 
 //============================================================================
 //   PRIVATE STRUCTURES
@@ -303,7 +292,7 @@ struct _czi_tile {                    // subblock_segment + directory_entry_dv
   struct _czi_source    * source;                             // not owned (?)
   int32_t                 file_part;     // could be used in multi file case ?
   int64_t                 tile_offset;
-  char                    uid[9];
+  int64_t                 uid;
   enum czi_pixel_t        pixel_type;
   enum czi_compression_t  compression;
   enum czi_pyramid_t      pyramid_type;
@@ -312,7 +301,7 @@ struct _czi_tile {                    // subblock_segment + directory_entry_dv
   int32_t                 metadata_size;
   int32_t                 data_size;
   int32_t                 attachment_size;
-  uint8_t               * metadata_buf;              // only loaded when asked
+  char                  * metadata_buf;              // only loaded when asked
   uint8_t               * data_buf;                  // only loaded when asked
   uint8_t               * attachment_buf;            // only loaded when asked
 };
@@ -329,9 +318,10 @@ struct _czi_dimension {                                  // dimension_entry_dv
 struct _czi_metadata {
   struct _czi         * czi;
   struct _czi_source  * source;
+  int64_t               offset;
   int32_t               xml_size;
   int32_t               attachment_size;
-  uint8_t             * xml_buf;
+  char                * xml_buf;
   uint8_t             * attachment_buf;
 };
 
@@ -350,6 +340,17 @@ struct _czi_attachment {
 //============================================================================
 //   PRIVATE STRINGS
 //============================================================================
+
+// segments
+const int32_t CZI_ALIGNMENT     = 32;
+const int32_t CZI_HEADER_SIZE   = 32;
+const char *  CZI_FILE          = "ZISRAWFILE";
+const char *  CZI_DIRECTORY     = "ZISRAWDIRECTORY";
+const char *  CZI_SUBBLOCK      = "ZISRAWSUBBLOCK";
+const char *  CZI_METADATA      = "ZISRAWMETADATA";
+const char *  CZI_ATTACH        = "ZISRAWATTACH";
+const char *  CZI_ATTDIR        = "ZISRAWATTDIR";
+const char *  CZI_DELETED       = "DELETED";
 
 // czi content types
 const char * czi_content_zip    = "ZIP";     // ZIP stream
@@ -409,6 +410,9 @@ static bool read_items(
 static bool czi_find_sources( const char * filename, struct _czi * czi, GError ** err );
 static bool czi_decode_one_stream( struct _czi_source * source, struct _czi * czi, GError ** err );
 static bool czi_add_tile( struct _czi * czi, struct _czi_tile * tile, int32_t ss_x, int32_t ss_y, GError ** err );
+static bool czi_update_bool_dimension( struct _czi * czi, char key, int32_t size, GError ** err );
+static bool czi_update_bool_compression( struct _czi * czi, enum czi_compression_t compression, GError ** err );
+static int32_t czi_cmp_level( const struct _czi_level ** l1, const struct _czi_level ** l2 );
 
 //--- new --------------------------------------------------------------------
 static struct _czi             * czi_new( GError ** err );
@@ -420,6 +424,8 @@ static struct _czi_metadata    * czi_new_metadata( struct _czi * czi, GError ** 
 static struct _czi_tile        * czi_new_tile( GError ** err );
 static struct _czi_dimension   * czi_new_dimension( struct _czi_tile * tile, GError ** err );
 static int32_t                 * czi_new_S32( int32_t integer, GError ** err );
+static int64_t                 * czi_new_S64( int64_t integer, GError ** err );
+static struct _openslide_czi_tile_descriptor * czi_new_tile_descriptor( struct _czi_tile * tile, GError ** err );
 
 //--- free -------------------------------------------------------------------
 static void czi_free(              struct _czi              * ptr );
@@ -431,6 +437,8 @@ static void czi_free_attachment(   struct _czi_attachment   * ptr );
 static void czi_free_tile(         struct _czi_tile         * ptr );
 static void czi_free_dimension(    struct _czi_dimension    * ptr );
 static void czi_free_S32(          int32_t                  * ptr );
+static void czi_free_S64(          int64_t                  * ptr );
+static void czi_free_tile_descriptor( struct _openslide_czi_tile_descriptor * ptr );
 
 //--- read -------------------------------------------------------------------
 static bool czi_parse_directory(  struct _czi_source * source, struct _czi * czi,                     GError ** err );
@@ -470,7 +478,7 @@ static bool czi_is_zisraw(
 //============================================================================
 
 //============================================================================
-//    GENERIC UTILS (move them after)
+//    GENERIC UTILS (move them after ?)
 //============================================================================
 
 bool do_byte_swap(
@@ -605,12 +613,12 @@ bool czi_decode_one_stream(
   int64_t position = ftello( source->stream );
   int64_t position_max = source->begin + source->size;
   bool check_position = ( source->size > 0 );
-  struct _czi_segment_header * header = (struct _czi_segment_header*) g_malloc0( sizeof(struct _czi_segment_header) );
+  struct _czi_segment_header * header = (struct _czi_segment_header*) g_slice_alloc0( sizeof(struct _czi_segment_header) );
   while( !feof( source->stream ) && (!check_position || position < position_max ) )
   {
     if( !czi_read_next_segment_header( source, header, err ) ) {
       // we assume it is because there are no segments left
-      g_free( header );
+      g_slice_free( struct _czi_segment_header, header );
       g_clear_error( err );
       err = NULL;
       break;
@@ -642,7 +650,8 @@ bool czi_decode_one_stream(
     }
     else if( !strcmp( header->id, CZI_ATTDIR ) )
     {
-      if( !czi_parse_attdir( source, czi, err ) )
+      //if( !czi_parse_attdir( source, czi, err ) )
+      if( !czi_skip_segment( source, header, err ) ) // Temporary
         return false;
     }
     else if( !strcmp( header->id, CZI_ATTACH ) )
@@ -681,6 +690,7 @@ bool czi_add_tile(
   GError           ** err
 )
 {
+  // g_debug( "czi_add_tile" );
   g_assert( czi );
   g_assert( tile );
   struct _czi_level * level;
@@ -688,8 +698,9 @@ bool czi_add_tile(
   GList * list_keys, * current_key;
   int32_t start, size;
   int32_t * cur_start, * cur_size;
+  uint32_t i;
 
-  for( uint32_t i=0; i < czi->levels->len; ++i )
+  for( i=0; i < czi->levels->len; ++i )
   {
     level = (struct _czi_level*) g_ptr_array_index( czi->levels, i );
     if( level->subsampling_x == ss_x && level->subsampling_y == ss_y )
@@ -706,9 +717,13 @@ bool czi_add_tile(
     level->pyramid_type  = tile->pyramid_type;
     level->subsampling_x = ss_x;
     level->subsampling_y = ss_y;
+    g_ptr_array_add( czi->levels, level );
   }
 
-  g_hash_table_insert( level->tiles, g_strdup( (char*)tile->uid ), tile );
+  // int32_t start_x = ( (struct _czi_dimension *) g_hash_table_lookup( tile->dimensions, "X" ) )->start;
+  // int32_t start_y = ( (struct _czi_dimension *) g_hash_table_lookup( tile->dimensions, "Y" ) )->start;
+  // g_debug( "insert l %d t %ld p (%d, %d)", ss_x, tile->uid, start_x, start_y );
+  g_hash_table_insert( level->tiles, czi_new_S64(tile->uid,0), tile );
   list_keys = g_hash_table_get_keys( tile->dimensions );
   current_key = list_keys;
   while( current_key )
@@ -729,13 +744,136 @@ bool czi_add_tile(
       if( start < *cur_start ) *cur_start = start;
       if( ( start + size - *cur_start ) > *cur_size ) *cur_size = (start + size - *cur_start);
     }
+    if( !czi_update_bool_dimension( czi, ((char*)current_key->data)[0], *cur_size, err ) )
+      return false;
     current_key = g_list_next( current_key );
   }
+  if( !czi_update_bool_compression( czi, tile->compression, err ) )
+    return false;
 
   g_list_free( list_keys );
   return true;
 }
 
+bool czi_update_bool_dimension(
+  struct _czi  * czi,
+  char           key,
+  int32_t        size,
+  GError      ** err
+)
+{
+
+  if( size > 1 )
+  {
+    switch( key )
+    {
+      case 'V':
+        czi->is_multi_view = true;
+        break;
+      case 'H':
+        czi->is_multi_phase = true;
+        break;
+      case 'M':
+        // nothing to do
+        break;
+      case 'B':
+        czi->is_multi_block = true;
+        break;
+      case 'I':
+        czi->is_multi_illumination = true;
+        break;
+      case 'S':
+        czi->is_multi_scenes = true;
+        break;
+      case 'R':
+        czi->is_multi_rotation = true;
+        break;
+      case 'T':
+        czi->is_multi_time = true;
+        break;
+      case 'Z':
+        czi->is_multi_zslice = true;
+        break;
+      case 'C':
+        czi->is_multi_channel = true;
+        break;
+      case 'Y':
+        // nothing to do
+        break;
+      case 'X':
+        // nothing to do
+        break;
+      default:
+        g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                     "Unknown dimension %c", key );
+        return false;
+    }
+  }
+
+  return true;
+}
+
+bool czi_update_bool_compression(
+  struct _czi             * czi,
+  enum czi_compression_t    compression,
+  GError                 ** err
+)
+{
+  switch( compression )
+  {
+    case CMP_UNKNOWN:
+      // what to do ?
+      break;
+    case UNCOMPRESSED:
+      czi->has_data_uncompressed = true;
+      break;
+    case JPEG:
+      czi->has_data_jpg = true;
+      break;
+    case LZW:
+      czi->has_data_lzw = true;
+      break;
+    case JPEGXR:
+      czi->has_data_jpgxr = true;
+      break;
+    case CAMERA_SPEC:
+      czi->has_data_cameraspec = true;
+      break;
+    case SYSTEM_SPEC:
+      czi->has_data_systemspec = true;
+      break;
+    default:
+      g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                   "Unknown compression %d", (int)compression );
+      return false;
+  }
+  return true;
+}
+
+int32_t czi_cmp_level(
+  const struct _czi_level ** l1,
+  const struct _czi_level ** l2
+)
+{
+  int32_t ss_x_1 = (*l1)->subsampling_x;
+  int32_t ss_y_1 = (*l1)->subsampling_y;
+  int32_t ss_x_2 = (*l2)->subsampling_x;
+  int32_t ss_y_2 = (*l2)->subsampling_y;
+
+  if( ss_x_1 < ss_x_2 )
+    return -1;
+  else if( ss_x_1 == ss_x_2 )
+  {
+    if( ss_y_1 < ss_y_2 )
+      return -1;
+    else if( ss_y_1 == ss_y_2 )
+      return 0;
+    else
+      return 1;
+  }
+  else
+    return 1;
+}
 
 //============================================================================
 //   READ UTILS
@@ -750,7 +888,6 @@ bool czi_read_next_segment_header(
   g_assert( source );
   g_assert( source->stream );
   g_assert( segmentheader );
-  g_return_val_if_fail( err == NULL || *err == NULL, false );
 
   FILE * stream = source->stream;
   off_t current_pos=-1;
@@ -929,7 +1066,7 @@ bool czi_is_zisraw( FILE * stream, GError ** err )
 
 struct _czi * czi_new( GError ** err )
 {
-  struct _czi * czi = (struct _czi*) g_try_malloc0( sizeof(struct _czi) );
+  struct _czi * czi = (struct _czi*) g_slice_alloc0( sizeof(struct _czi) );
   if( !czi ) {
     g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                  "Failed to allocate %ld bytes", sizeof(struct _czi) );
@@ -975,12 +1112,21 @@ struct _czi_level * czi_new_level( struct _czi * czi, GError ** err )
     return NULL;
   }
 
-  level->size = g_hash_table_new_full( &g_str_hash, &g_str_equal,
-                &g_free, (void(*)(gpointer)) &czi_free_S32 );
-  level->start = g_hash_table_new_full( &g_str_hash, &g_str_equal,
-                 &g_free, (void(*)(gpointer)) &czi_free_S32 );
-  level->tiles = g_hash_table_new_full( &g_str_hash, &g_str_equal,
-                 &g_free, &g_free );
+  level->size = g_hash_table_new_full(
+                  &g_str_hash,
+                  &g_str_equal,
+                  &g_free,
+                  (void(*)(gpointer)) &czi_free_S32 );
+  level->start = g_hash_table_new_full(
+                  &g_str_hash,
+                  &g_str_equal,
+                  &g_free,
+                  (void(*)(gpointer)) &czi_free_S32 );
+  level->tiles = g_hash_table_new_full(
+                  &g_int64_hash,
+                  &g_int64_equal,
+                  (void(*)(gpointer)) &czi_free_S64,
+                  (void(*)(gpointer)) &czi_free_tile );
 
   if( !level->size  || !level->start || !level->tiles ) {
     czi_free_level( level );
@@ -1042,7 +1188,7 @@ struct _czi_tile * czi_new_tile( GError ** err )
   tile->dimensions = g_hash_table_new_full( &g_str_hash, &g_str_equal,
                       &g_free, (void(*)(gpointer)) &czi_free_dimension );
   if( !tile->dimensions ) {
-    g_slice_free1( sizeof(struct _czi_tile), tile );
+    g_slice_free( struct _czi_tile, tile );
     g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                  "Failed to initiate _czi_tile structure" );
     return NULL;
@@ -1078,73 +1224,146 @@ int32_t * czi_new_S32( int32_t integer, GError ** err )
   return value;
 }
 
+int64_t * czi_new_S64( int64_t integer, GError ** err )
+{
+  int64_t * value = (int64_t*) g_slice_alloc0( sizeof(int64_t) );
+  if( !value ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to allocate %ld bytes", sizeof(int64_t) );
+    return NULL;
+  }
+  *value = integer;
+  return value;
+}
+
+
+struct _openslide_czi_tile_descriptor * czi_new_tile_descriptor(
+  struct _czi_tile  * tile,
+  GError           ** err
+)
+{
+  struct _czi_dimension * dim;
+  struct _openslide_czi_tile_descriptor * tile_desc;
+
+  tile_desc = (struct _openslide_czi_tile_descriptor *) g_slice_alloc0( sizeof(struct _openslide_czi_tile_descriptor) );
+  tile_desc->uid = tile->uid;
+  tile_desc->pixel_type = tile->pixel_type;
+  tile_desc->compression = tile->compression;
+  tile_desc->pyramid_type = tile->pyramid_type;
+
+  dim = (struct _czi_dimension*) g_hash_table_lookup( tile->dimensions, "X" );
+  if( !dim ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+               "Tile without X dimension." );
+    czi_free_tile_descriptor( tile_desc );
+    return NULL;
+  }
+  tile_desc->subsampling_x = dim->size / dim->stored_size;
+  tile_desc->size_x = dim->size;
+  tile_desc->start_x = dim->start;
+
+  dim = (struct _czi_dimension*) g_hash_table_lookup( tile->dimensions, "Y" );
+  if( !dim ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+               "Tile without Y dimension." );
+    czi_free_tile_descriptor( tile_desc );
+    return NULL;
+  }
+  tile_desc->subsampling_y = dim->size / dim->stored_size;
+  tile_desc->size_y = dim->size;
+  tile_desc->start_y = dim->start;
+
+  return tile_desc;
+}
+
 //============================================================================
 //   FREE
 //============================================================================
 
 void czi_free( struct _czi * ptr )
 {
+  // g_debug( "czi_free" );
   if( ptr ) {
     if( ptr->sources )      g_ptr_array_free( ptr->sources, true );
     if( ptr->file_headers ) g_ptr_array_free( ptr->file_headers, true );
     if( ptr->levels )       g_ptr_array_free( ptr->levels, true );
     if( ptr->metadata )     g_ptr_array_free( ptr->metadata, true );
     if( ptr->attachments )  g_hash_table_destroy( ptr->attachments );
-    g_free( ptr );
+    g_slice_free( struct _czi, ptr );
   }
 }
 
 void czi_free_source( struct _czi_source * ptr )
 {
+  // g_debug( "czi_free_source" );
   if( ptr ) {
     if( ptr->filename ) g_free( ptr->filename );
     if( ptr->stream )   fclose( ptr->stream );
-    g_slice_free1( sizeof(struct _czi_source), ptr );
+    g_slice_free( struct _czi_source, ptr );
   }
 }
 
 void czi_free_file_header( struct _czi_file_header * ptr )
 {
-  if( ptr ) g_slice_free1( sizeof(struct _czi_file_header), ptr );
+  // g_debug( "czi_free_file_header" );
+  if( ptr ) g_slice_free( struct _czi_file_header, ptr );
 }
 
 void czi_free_level( struct _czi_level * ptr )
 {
+  // g_debug( "czi_free_level" );
   if( ptr ) {
     if( ptr->size )       g_hash_table_destroy( ptr->size );
     if( ptr->start )      g_hash_table_destroy( ptr->start );
     if( ptr->tiles )      g_hash_table_destroy( ptr->tiles );
-    g_slice_free1( sizeof(struct _czi_source), ptr );
+    g_slice_free( struct _czi_level, ptr );
   }
 }
 
 void czi_free_metadata( struct _czi_metadata * ptr )
 {
-  if( ptr ) g_slice_free1( sizeof(struct _czi_metadata), ptr );
+  // g_debug( "czi_free_metadata" );
+  if( ptr ) g_slice_free( struct _czi_metadata, ptr );
 }
 
 void czi_free_attachment( struct _czi_attachment * ptr )
 {
-  if( ptr ) g_slice_free1( sizeof(struct _czi_attachment), ptr );
+  // g_debug(  " czi_free_attachment");
+  if( ptr ) g_slice_free( struct _czi_attachment, ptr );
 }
 
 void czi_free_tile( struct _czi_tile * ptr )
 {
+  // g_debug( "czi_free_tile" );
   if( ptr ) {
     if( ptr->dimensions )  g_hash_table_destroy( ptr->dimensions );
-    g_slice_free1( sizeof(struct _czi_tile), ptr );
+    g_slice_free( struct _czi_tile, ptr );
   }
   return;
 }
 
 void czi_free_dimension( struct _czi_dimension * ptr )
 {
-  if( ptr ) g_slice_free1( sizeof(struct _czi_dimension), ptr );
+  // g_debug( "czi_free_dimension" );
+  if( ptr ) g_slice_free( struct _czi_dimension, ptr );
 }
 
 void czi_free_S32( int32_t * ptr )
 {
-  if( ptr ) g_slice_free1( sizeof(int32_t), ptr );
+  // g_debug( "czi_free_S32" );
+  if( ptr ) g_slice_free( int32_t, ptr );
+}
+
+void czi_free_S64( int64_t * ptr )
+{
+  // g_debug( "czi_free_S64" );
+  if( ptr ) g_slice_free( int64_t, ptr );
+}
+
+void czi_free_tile_descriptor( struct _openslide_czi_tile_descriptor * ptr )
+{
+  // g_debug( "czi_free_tile_descriptor" );
+  if( ptr ) g_slice_free( struct _openslide_czi_tile_descriptor, ptr );
 }
 
 //============================================================================
@@ -1157,6 +1376,7 @@ bool czi_parse_directory(
   GError             ** err
 )
 {
+  g_debug( "czi_parse_directory" );
   g_assert( source );
   g_assert( source->stream );
   g_assert( czi );
@@ -1164,12 +1384,13 @@ bool czi_parse_directory(
   FILE * stream = source->stream;
   int32_t entry_count;
   int32_t ss_x, ss_y;
-  int32_t   val_S32;
-  int32_t * ptr_S32;
   struct _czi_tile * new_tile = NULL;
   struct _czi_dimension * dim;
+  uint8_t uid[8];
+  int32_t * ptr_S32;
+  int64_t * ptr_S64;
 
-  TRY_READ_ITEMS( &entry_count, 1, sizeof(entry_count), stream, err, "Failed to parse directory: " );
+  TRY_READ_ITEMS( &entry_count, 1, 4, stream, err, "Failed to parse directory: " );
   fseeko( stream, 124, SEEK_CUR );                       // 124 bytes reserved
 
   for( int32_t i=0; i<entry_count; ++i )
@@ -1180,7 +1401,6 @@ bool czi_parse_directory(
       czi_free_tile( new_tile );
       return false;
     }
-    new_tile->uid[8] = '\0';
 
     dim = (struct _czi_dimension*) g_hash_table_lookup( new_tile->dimensions, "X" );
     if( !dim ) {
@@ -1190,9 +1410,9 @@ bool czi_parse_directory(
       return false;
     }
     ss_x = dim->size / dim->stored_size;
-    val_S32 = dim->start;
-    ptr_S32 = (int32_t*) new_tile->uid;
-    *ptr_S32 = val_S32;
+    ptr_S32 = (int32_t*) (uid+4);
+    *ptr_S32 = dim->start;
+    //new_tile->uid = (uint64_t)( dim->start );
 
     dim = (struct _czi_dimension*) g_hash_table_lookup( new_tile->dimensions, "Y" );
     if( !dim ) {
@@ -1202,10 +1422,12 @@ bool czi_parse_directory(
       return false;
     }
     ss_y = dim->size / dim->stored_size;
-    val_S32 = dim->start;
-    ptr_S32 = (int32_t*) (new_tile->uid+4);
-    *ptr_S32 = val_S32;
+    ptr_S32 = (int32_t*) (uid);
+    *ptr_S32 = dim->start;
+    //new_tile->uid = (new_tile->uid) | ( (uint64_t)(dim->start) << 4 );
 
+    ptr_S64 = (int64_t *) uid;
+    new_tile->uid = *ptr_S64;
     if( !czi_add_tile( czi, new_tile, ss_x, ss_y, err ) ) {
       czi_free_tile( new_tile );
       return false;
@@ -1213,6 +1435,9 @@ bool czi_parse_directory(
     new_tile = NULL;
   }
 
+  g_ptr_array_sort(
+    czi->levels,
+    (gint(*)(gconstpointer,gconstpointer)) czi_cmp_level );
   return true;
 }
 
@@ -1232,6 +1457,7 @@ bool czi_read_file_header(
   GError                  ** err
 )
 {
+  g_debug ( "czi_read_file_header" );
   g_assert( source );
   g_assert( source->stream );
   g_assert( file_header );
@@ -1261,6 +1487,7 @@ bool czi_read_metadata(
   GError               ** err
 )
 {
+  g_debug( "czi_read_metadata" );
   g_assert( source );
   g_assert( source->stream );
   g_assert( metadata );
@@ -1271,6 +1498,7 @@ bool czi_read_metadata(
   TRY_READ_ITEMS( &(metadata->xml_size),        1, 4, stream, err, "Failed to read metadata: " );
   TRY_READ_ITEMS( &(metadata->attachment_size), 1, 4, stream, err, "Failed to read metadata: " );
   TRY_FSEEKO( stream, 248,                       SEEK_CUR, err, "Failed to read metadata: " );  // end of segment
+  metadata->offset = (int64_t) ftello( stream );
   TRY_FSEEKO( stream, metadata->xml_size,        SEEK_CUR, err, "Failed to read metadata: " );  // skip xml block
   TRY_FSEEKO( stream, metadata->attachment_size, SEEK_CUR, err, "Failed to read metadata: " );  // skip att block
   return true;
@@ -1282,6 +1510,7 @@ bool czi_read_tile(
   GError             ** err
 )
 {
+  // g_debug( "czi_read_tile" );
   g_assert( source );
   g_assert( source->stream );
   g_assert( tile );
@@ -1294,13 +1523,26 @@ bool czi_read_tile(
 
   TRY_FSEEKO( stream, 2, SEEK_CUR, err, "Failed to read tile: " );                        // SchemaType
   TRY_READ_ITEMS( &val32,               1, 4, stream, err, "Failed to read tile: " );      // PixelType
-  tile->pixel_type = (enum czi_pixel_t) val32;
+  if( ( val32 >=0 && val32 <= 4 ) || ( val32 >=8 && val32 <= 13 ) )
+    tile->pixel_type = (enum czi_pixel_t) val32;
+  else
+    tile->pixel_type = PXL_UNKNOWN;
   TRY_READ_ITEMS( &(tile->tile_offset), 1, 8, stream, err, "Failed to read tile: " );
   TRY_READ_ITEMS( &(tile->file_part),   1, 4, stream, err, "Failed to read tile: " );
   TRY_READ_ITEMS( &val32, 1, sizeof(int32_t), stream, err, "Failed to read tile: " );    // Compression
-  tile->compression = (enum czi_compression_t) val32;
+  if( val32 == 0 || val32 == 1 || val32 == 2 || val32 ==  4 )
+    tile->compression = (enum czi_compression_t) val32;
+  else if( val32 >= 100 && val32 < 1000 )
+    tile->compression = CAMERA_SPEC;
+  else if( val32 >= 1000 )
+    tile->compression = SYSTEM_SPEC;
+  else
+    tile->compression = CMP_UNKNOWN;
   TRY_READ_ITEMS( &val8,                1, 1, stream, err, "Failed to read tile: " );    // PyramidType
-  tile->pyramid_type = (enum czi_pyramid_t) val8;
+  if( val8 >= 0 && val8 <= 2 )
+    tile->pyramid_type = (enum czi_pyramid_t) val8;
+  else
+    tile->pyramid_type = PYR_UNKNOWN;
   TRY_FSEEKO( stream, 5, SEEK_CUR, err, "Failed to read tile: " );                          // Reserved
   TRY_READ_ITEMS( &dimension_count,     1, 4, stream, err, "Failed to read tile: " );
 
@@ -1324,6 +1566,7 @@ bool czi_read_dimension(
   GError                ** err
 )
 {
+  // g_debug( "czi_read_dimension" );
   g_assert( source );
   g_assert( source->stream );
   g_assert( dimension );
@@ -1348,6 +1591,7 @@ bool czi_read_dimension(
 //--- check ------------------------------------------------------------------
 bool _openslide_czi_is_zisraw( const char * filename, GError ** err )
 {
+  g_debug( "_openslide_czi_is_zisraw" );
   g_assert( filename );
 
   FILE * stream = _openslide_fopen( filename, "rb", err );
@@ -1392,59 +1636,280 @@ _openslide_czi * _openslide_czi_decode( const char * filename, GError ** err )
 }
 
 //--- tiles ------------------------------------------------------------------
-int32_t _openslide_czi_get_level_count( _openslide_czi * czi, GError **err )
+int32_t _openslide_czi_get_level_count( _openslide_czi  * czi )
 {
-  // TODO
-  return 0;
+  return czi->levels->len;
 }
 
-GList   * _openslide_czi_get_level_tiles( _openslide_czi * czi, GError **err )
+int32_t _openslide_czi_get_level_subsampling(
+  _openslide_czi  * czi,
+  int32_t           level,
+  GError         ** err
+)
 {
-  // TODO
-  return NULL;
+  struct _czi_level * s_level = (struct _czi_level *) g_ptr_array_index( czi->levels, level );
+  if( !s_level ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to find level %d", level );
+    return 0;
+  }
+  return s_level->subsampling_x;
 }
 
-uint8_t * _openslide_czi_load_tile( _openslide_czi * czi, const char * guid, GError **err )
+bool _openslide_czi_get_level_tile_size(
+  _openslide_czi         * czi,
+  int32_t                  level,
+  int32_t                * w,
+  int32_t                * h,
+  GError                ** err
+)
 {
-  // TODO
-  return NULL;
+  struct _czi_level * s_level = (struct _czi_level *) g_ptr_array_index( czi->levels, level );
+  if( !s_level ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to find level %d", level );
+    return false;
+  }
+  GList * keys = g_hash_table_get_keys( s_level->tiles );
+  if( !keys ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "No key in level %d", level );
+    return false;
+  }
+  struct _czi_tile  * tile = (struct _czi_tile *) g_hash_table_lookup( s_level->tiles, (const char *)keys->data );
+  g_list_free( keys );
+  if( !tile ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to load tile from level %d", level );
+    return false;
+  }
+  struct _czi_dimension * dim = (struct _czi_dimension *) g_hash_table_lookup( tile->dimensions, "X" );
+  if( !tile ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to load X dimension from level %d", level );
+    return false;
+  }
+  *w = dim->stored_size;
+  dim = (struct _czi_dimension *) g_hash_table_lookup( tile->dimensions, "Y" );
+  if( !tile ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to load Y dimension from level %d", level );
+    return false;
+  }
+  *h = dim->stored_size;
+
+  return true;
+
 }
 
-void _openslide_czi_destroy_tile( _openslide_czi * czi, const char * guid, GError **err )
+GList * _openslide_czi_get_level_tiles(
+  _openslide_czi  * czi,
+  int32_t           i,
+  GError         ** err
+)
 {
-  // TODO
-  return;
+  struct _czi_level * level;
+  struct _czi_tile * tile;
+  struct _openslide_czi_tile_descriptor * tile_desc;
+  GList * intern_list, * intern_list_current, * extern_list;
+
+  level = (struct _czi_level *) g_ptr_array_index( czi->levels, i );
+  intern_list = g_hash_table_get_values( level->tiles );
+  intern_list_current = intern_list;
+  while( intern_list_current )
+  {
+    tile = (struct _czi_tile *) intern_list_current->data;
+    tile_desc = czi_new_tile_descriptor( tile, err );
+    if( !tile_desc ) {
+      _openslide_czi_free_list_tiles( extern_list );
+      return NULL;
+    }
+    extern_list = g_list_insert_before( extern_list, extern_list, tile_desc );
+    intern_list_current = g_list_next( intern_list_current );
+  }
+  g_list_free( intern_list );
+
+  return extern_list;
+}
+
+uint8_t * _openslide_czi_load_tile(
+  _openslide_czi  * czi,
+  int32_t           level,
+  int64_t           uid,
+  int32_t         * buffer_size,
+  GError         ** err
+)
+{
+  struct _czi_level * s_level = g_ptr_array_index( czi->levels, level );
+  if( !s_level ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to find level %d", level );
+    return NULL;
+  }
+  struct _czi_tile * tile = g_hash_table_lookup( s_level->tiles, &uid );
+  if( !tile ){
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to find tile %ld", uid );
+    return NULL;
+  }
+
+  g_assert( tile->source );
+  if( !tile->source->stream ) {
+    tile->source->stream = _openslide_fopen( tile->source->filename, "rb", err );
+    if( !tile->source->stream ) return NULL;
+  }
+  FILE * stream = tile->source->stream;
+  TRY_FSEEKO( stream, tile->tile_offset, SEEK_SET, err, "Failed to load tile: " );
+  tile->data_buf = g_slice_alloc0( tile->data_size );
+  if( !tile->data_buf ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to allocate %d bytes", tile->data_size );
+    return NULL;
+  }
+  if( !read_items( tile->data_buf, 1, tile->data_size, stream, err ) ) {
+    g_prefix_error( err, "Failed to load tile: " );
+    g_slice_free1( tile->data_size, tile->data_buf );
+    tile->data_buf = NULL;
+    return NULL;
+  }
+
+  if( buffer_size )  *buffer_size = tile->data_size;
+  return tile->data_buf;
+}
+
+bool _openslide_czi_destroy_tile(
+  _openslide_czi  * czi,
+  int32_t           level,
+  int64_t           uid,
+  GError         ** err
+)
+{
+  struct _czi_level * s_level = g_ptr_array_index( czi->levels, level );
+  if( !s_level ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to find level %d", level );
+    return false;
+  }
+  struct _czi_tile * tile = g_hash_table_lookup( s_level->tiles, &uid );
+  if( !tile ){
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to find tile %ld", uid );
+    return false;
+  }
+  if( tile->data_buf ) {
+    g_slice_free1( tile->data_size, tile->data_buf );
+    tile->data_buf = NULL;
+  }
+
+  return true;
+}
+
+void _openslide_czi_free_list_tiles( GList * list )
+{
+  GList * current = list;
+  while( current )
+  {
+    czi_free_tile_descriptor( current->data );
+    current = g_list_next( current );
+  }
+  current = g_list_previous( list );
+  while( current )
+  {
+    czi_free_tile_descriptor( current->data );
+    current = g_list_previous( current );
+  }
+  g_list_free( list );
 }
 
 //--- metadata ---------------------------------------------------------------
-int32_t _openslide_czi_get_metadata_count( _openslide_czi * czi, GError **err )
+int32_t _openslide_czi_get_metadata_count( _openslide_czi * czi )
 {
-  return 0;
+  return czi->metadata->len;
 }
 
-uint8_t * _openslide_czi_load_metadata( _openslide_czi * czi, int32_t index, GError **err )
+char * _openslide_czi_load_metadata(
+  _openslide_czi  * czi,
+  int32_t           index,
+  int32_t         * buffer_size,
+  GError         ** err
+)
 {
-  return NULL;
+  struct _czi_metadata * metadata = g_ptr_array_index( czi->metadata, index );
+  if( !metadata ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to access metadata block %d", index );
+    return NULL;
+  }
+
+  if( !metadata->source->stream ) {
+    metadata->source->stream = _openslide_fopen( metadata->source->filename , "rb", err );
+    if( !metadata->source->stream) return NULL;
+  }
+  FILE * stream = metadata->source->stream;
+  TRY_FSEEKO( stream, metadata->offset, SEEK_SET, err, "Failed to load metadata" );
+  metadata->xml_buf = g_slice_alloc0( metadata->xml_size + 1 );
+  if( !metadata->xml_buf ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to allocate %d bytes", metadata->xml_size );
+    return NULL;
+  }
+  if( !read_items( metadata->xml_buf, 1, metadata->xml_size, stream, err ) ) {
+    g_prefix_error( err, "Failed to load metadata %d", index );
+    g_slice_free1( metadata->xml_size, metadata->xml_buf );
+    metadata->xml_buf = NULL;
+    return NULL;
+  }
+
+  metadata->xml_buf[metadata->xml_size] = '\0';
+  if( buffer_size ) *buffer_size = metadata->xml_size+1;
+  return metadata->xml_buf;
 }
 
-void _openslide_czi_destroy_metadata( _openslide_czi * czi, int32_t index )
+bool _openslide_czi_destroy_metadata(
+  _openslide_czi  * czi,
+  int32_t           index,
+  GError         ** err
+)
 {
-  return;
+  struct _czi_metadata * metadata = g_ptr_array_index( czi->metadata, index );
+  if( !metadata ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to find metadata %d", index );
+    return false;
+  }
+  if( metadata->xml_buf ) {
+    g_slice_free1( metadata->xml_size+1, metadata->xml_buf );
+    metadata->xml_buf = NULL;
+  }
+
+  return true;
 }
 
 //--- attachments ------------------------------------------------------------
-_openslide_czi * _openslide_czi_decode_label( _openslide_czi * czi, GError **err )
+_openslide_czi * _openslide_czi_decode_label(
+  _openslide_czi  * czi  G_GNUC_UNUSED,
+  GError         ** err  G_GNUC_UNUSED
+)
 {
+  /*TODO*/
   return NULL;
 }
 
-_openslide_czi * _openslide_czi_decode_prescan( _openslide_czi * czi, GError **err )
+_openslide_czi * _openslide_czi_decode_prescan(
+  _openslide_czi  * czi  G_GNUC_UNUSED,
+  GError         ** err  G_GNUC_UNUSED
+)
 {
+  /*TODO*/
   return NULL;
 }
 
-_openslide_czi * _openslide_czi_decode_slide_preview( _openslide_czi * czi, GError **err )
+_openslide_czi * _openslide_czi_decode_slide_preview(
+  _openslide_czi  * czi  G_GNUC_UNUSED,
+  GError         ** err  G_GNUC_UNUSED
+)
 {
+  /*TODO*/
   return NULL;
 }
 
@@ -1625,6 +2090,11 @@ const struct _openslide_format _openslide_format_zeiss = {
   .open   = zeiss_open,
 };
 
+static const struct _openslide_ops _openslide_ops_zeiss = {
+  .paint_region = zeiss_paint_region,
+  .destroy      = zeiss_destroy,
+};
+
 // key:DRIVER-PRI-DECL
 //============================================================================
 //
@@ -1632,11 +2102,94 @@ const struct _openslide_format _openslide_format_zeiss = {
 //
 //============================================================================
 
-static bool zeiss_set_properties(
-  openslide_t     * osr,
-  _openslide_czi  * czi_descriptor,
-  GError         ** err
-);
+static bool zeiss_check( _openslide_czi * czi, GError ** err );
+static bool zeiss_set_properties( openslide_t * osr, _openslide_czi * czi, GError ** err );
+static bool zeiss_set_levels( openslide_t * osr, _openslide_czi * czi, GError ** err );
+
+//============================================================================
+//   ZEISS PROPERTIES
+//============================================================================
+
+#define ZEISS_IMAGESIZE_X      "zeiss.information.image.size-x"
+#define ZEISS_IMAGESIZE_Y      "zeiss.information.image.size-y"
+#define ZEISS_IMAGESIZE_C      "zeiss.information.image.size-c"
+#define ZEISS_IMAGESIZE_Z      "zeiss.information.image.size-z"
+#define ZEISS_IMAGESIZE_T      "zeiss.information.image.size-t"
+#define ZEISS_IMAGESIZE_H      "zeiss.information.image.size-h"
+#define ZEISS_IMAGESIZE_R      "zeiss.information.image.size-r"
+#define ZEISS_IMAGESIZE_S      "zeiss.information.image.size-s"
+#define ZEISS_IMAGESIZE_I      "zeiss.information.image.size-i"
+#define ZEISS_IMAGESIZE_M      "zeiss.information.image.size-m"
+#define ZEISS_IMAGESIZE_B      "zeiss.information.image.size-b"
+#define ZEISS_IMAGESIZE_V      "zeiss.information.image.size-v"
+#define ZEISS_ACQ_DATE         "zeiss.information.image.acquisition-date-and-time"
+#define ZEISS_ACQ_DURATION     "zeiss.information.image.acquisition-duration"
+#define ZEISS_PIXEL_TYPE       "zeiss.information.image.pixel-type"
+
+#define ZEISS_BIT_COUNT        "zeiss.information.image.component-bit-count"
+#define ZEISS_CH_COUNT         "zeiss.information.image.dimensions.channel-count"
+#define ZEISS_CH_NAME          "zeiss.information.image.dimensions.channel[%d].name"
+#define ZEISS_CH_PIXEL_TYPE    "zeiss.information.image.dimensions.channel[%d].pixel_type"
+#define ZEISS_CH_BIT_COUNT     "zeiss.information.image.dimensions.channel[%d].component-bit-count"
+#define ZEISS_CH_ACQMODE       "zeiss.information.image.dimensions.channel[%d].acquisition-mode"
+#define ZEISS_CH_ILTYPE        "zeiss.information.image.dimensions.channel[%d].illumination-type"
+#define ZEISS_CH_CONTRAST      "zeiss.information.image.dimensions.channel[%d].constrast-method"
+#define ZEISS_CH_FLUOR         "zeiss.information.image.dimensions.channel[%d].fluor"
+#define ZEISS_CH_COLOR         "zeiss.information.image.dimensions.channel[%d].color"
+#define ZEISS_CH_EXPTIME       "zeiss.information.image.dimensions.channel[%d].exposure-time"
+#define ZEISS_CH_THCK          "zeiss.information.image.dimensions.channel[%d].section-thickness"
+
+#define ZEISS_OBJ_COUNT        "zeiss.information.instrument.objective-count"
+#define ZEISS_OBJ_NAME         "zeiss.information.instrument.objective[%d].objective-name"
+#define ZEISS_OBJ_LENSNA       "zeiss.information.instrument.objective[%d].lens-na"
+#define ZEISS_OBJ_MAGN         "zeiss.information.instrument.objective[%d].nominal-magnification"
+#define ZEISS_OBJ_DIST         "zeiss.information.instrument.objective[%d].working-distance"
+#define ZEISS_OBJ_GEOM         "zeiss.information.instrument.objective[%d].pupil-geometry"
+#define ZEISS_OBJ_IMMERSION    "zeiss.information.instrument.objective[%d].immersion"
+
+#define ZEISS_SC_X             "zeiss.scaling.distance-x.value"
+#define ZEISS_SC_Y             "zeiss.scaling.distance-y.value"
+
+#define ZEISS_ACQBLOCK_COUNT     "zeiss.experiment.acquisition-block-count"
+#define ZEISS_OVERLAP            "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.overlap:"
+#define ZEISS_COVERING_MODE      "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region-covering-mode"
+#define ZEISS_TILEREGION_COUNT   "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region-count"
+#define ZEISS_TILEREGION_CENTER  "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region[%d].center-position"
+#define ZEISS_TILEREGION_CONTOUR "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region[%d].contour-size"
+#define ZEISS_TILEREGION_COLUMNS "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region[%d].columns"
+#define ZEISS_TILEREGION_ROWS    "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region[%d].rows"
+#define ZEISS_TILEREGION_Z       "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region[%d].z"
+#define ZEISS_TILEREGION_ACQ     "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region[%d].is-used-for-acquisition"
+#define ZEISS_TILEREGION_PROTECT "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region[%d].is-protected"
+#define ZEISS_TILEREGION_CTYPE   "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region[%d].contour-type"
+
+// Used for openslide properties
+#define ZEISS_VOXELSIZE_X      ZEISS_SC_X
+#define ZEISS_VOXELSIZE_Y      ZEISS_SC_Y
+#define ZEISS_MAGNIFICATION    "zeiss.information.instrument.objective[0].nominal-magnification"
+#define ZEISS_BG_COLOR         "zeiss.information.image.dimensions.channel[0].color"
+
+#define ZEISS_SET_PROP( osr, context, property_format, path_format, num )    \
+  {                                                                          \
+    char *property, *path;                                                   \
+    property = g_strdup_printf( property_format, num );                      \
+    path = g_strdup_printf( path_format, num+1 );                            \
+    _openslide_xml_set_prop_from_xpath( osr, context, property, path );      \
+    g_free( property );                                                      \
+    g_free( path );                                                          \
+  }                                                                          \
+  (void)0
+
+#define ZEISS_SET_PROP2( osr, context, property_format, path_format, n1, n2 ) \
+  {                                                                           \
+    char *property, *path;                                                    \
+    property = g_strdup_printf( property_format, n1, n2 );                    \
+    path = g_strdup_printf( path_format, n1+1, n2+1 );                        \
+    _openslide_xml_set_prop_from_xpath( osr, context, property, path );       \
+    g_free( property );                                                       \
+    g_free( path );                                                           \
+  }                                                                           \
+  (void)0
 
 //============================================================================
 //   TEMPORARY HELP: FORMAT-SPECIFIC KEYS
@@ -1677,54 +2230,382 @@ struct _openslide_ops {
 //
 //============================================================================
 
+bool zeiss_check(
+  _openslide_czi  * czi,
+  GError          ** err
+)
+{
+  // Look for unsupported images
+  if( _openslide_czi_is_multi_view( czi ) ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Multiple views not supported" );
+    return false;
+  }
+  if( _openslide_czi_is_multi_phase( czi ) ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Multiple phases not supported" );
+    return false;
+  }
+  if( _openslide_czi_is_multi_block( czi ) ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Multiple blocks not supported" );
+    return false;
+  }
+  if( _openslide_czi_is_multi_illumination( czi ) ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Multiple illuminations not supported" );
+    return false;
+  }
+  if( _openslide_czi_is_multi_rotation( czi ) ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Multiple rotations not supported" );
+    return false;
+  }
+  if( _openslide_czi_is_multi_time( czi ) ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Multiple time points not supported" );
+    return false;
+  }
+  if( _openslide_czi_is_multi_zslice( czi ) ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Z stacks not supported" );
+    return false;
+  }
+  if( _openslide_czi_is_multi_channel( czi ) ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Multiple channels not supported" );
+    return false;
+  }
+  if( _openslide_czi_has_data_jpgxr( czi ) ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "JPEGXR compression not supported" );
+    return false;
+  }
+  if( _openslide_czi_has_data_lzw( czi ) ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "LZW compression not supported" );
+    return false;
+  }
+  if( _openslide_czi_has_data_cameraspec( czi ) ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Camera specific compression not supported" );
+    return false;
+  }
+  if( _openslide_czi_has_data_systemspec( czi ) ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "System specific compression not supported" );
+    return false;
+  }
+
+  return true;
+}
+
 bool zeiss_set_properties(
   openslide_t     * osr,
-  _openslide_czi  * czi_descriptor,
+  _openslide_czi  * czi,
   GError         ** err
 )
 {
-  int32_t meta_count = _openslide_czi_get_metadata_count( czi_descriptor, err );
+  //--- decode xml block -----------------------------------------------------
+
+  int32_t meta_count = _openslide_czi_get_metadata_count( czi );
   if( meta_count <= 0 ) {
     g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                  "No metadata block to load" );
     return false;
   }
 
-  // try load metadata buffer n0
+  // load metadata buffer n0
   // (we suppose all files contain the same xml block)
-  uint8_t * xml_buffer = NULL;
-  xml_buffer = _openslide_czi_load_metadata( czi_descriptor, 0, err );
+  char * xml_buffer = NULL;
+  int32_t   xml_size;
+  xml_buffer = _openslide_czi_load_metadata( czi, 0, &xml_size, err );
   if( !xml_buffer )
     return false;
 
-  // try convert xml
+#ifdef ZEISS_WRITE_XML
+  FILE * streamout = _openslide_fopen( "/tmp/zeiss.xml", "wb", 0 );
+  fwrite( xml_buffer, xml_size, 1, streamout );
+  fclose( streamout );
+#endif
+
+  // convert xml
   xmlDoc * xml_doc = NULL;
   xml_doc = _openslide_xml_parse( (char*) xml_buffer, err );
-  _openslide_czi_destroy_metadata( czi_descriptor, 0 );
-  if( !xml_doc ) {
-    return false;
-  }
+  if( !xml_doc ) return false;
+  if( !_openslide_czi_destroy_metadata( czi, 0, err ) ) return false;
 
   // get path context
   xmlXPathContext * xml_path_context = _openslide_xml_xpath_create( xml_doc );
+  if( !xml_path_context ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "XML conversion to XPath context failed." );
+    return false;
+  }
 
-  // set openslide keys
-  _openslide_xml_set_prop_from_xpath( osr, xml_path_context,
-    "zeiss.scaling.items.distance-x.value",
+  //--- set vendor properties ------------------------------------------------
+  xmlXPathObject * xml_path_object = NULL;
+
+  // Information / Image
+  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_IMAGESIZE_X,
+    "/ImageDocument/Metadata/Information/Image/SizeX" );
+  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_IMAGESIZE_Y,
+    "/ImageDocument/Metadata/Information/Image/SizeY" );
+  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_IMAGESIZE_C,
+    "/ImageDocument/Metadata/Information/Image/SizeC" );
+  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_IMAGESIZE_Z,
+    "/ImageDocument/Metadata/Information/Image/SizeZ" );
+  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_IMAGESIZE_T,
+    "/ImageDocument/Metadata/Information/Image/SizeT" );
+  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_IMAGESIZE_H,
+    "/ImageDocument/Metadata/Information/Image/SizeH" );
+  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_IMAGESIZE_R,
+    "/ImageDocument/Metadata/Information/Image/SizeR" );
+  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_IMAGESIZE_S,
+    "/ImageDocument/Metadata/Information/Image/SizeS" );
+  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_IMAGESIZE_I,
+    "/ImageDocument/Metadata/Information/Image/SizeI" );
+  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_IMAGESIZE_M,
+    "/ImageDocument/Metadata/Information/Image/SizeM" );
+  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_IMAGESIZE_B,
+    "/ImageDocument/Metadata/Information/Image/SizeB" );
+  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_IMAGESIZE_V,
+    "/ImageDocument/Metadata/Information/Image/SizeV" );
+  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_ACQ_DATE,
+    "/ImageDocument/Metadata/Information/Image/AcquisitionDateAndTime" );
+  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_ACQ_DURATION,
+    "/ImageDocument/Metadata/Information/Image/AcquisitionDuration" );
+  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_PIXEL_TYPE,
+    "/ImageDocument/Metadata/Information/Image/PixelType" );
+  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_BIT_COUNT,
+    "/ImageDocument/Metadata/Information/Image/ComponentBitCount" );
+
+  // Information / Image / Dimensions
+  int32_t channel_count = 0;
+  xml_path_object = xmlXPathEvalExpression(BAD_CAST 
+    "/ImageDocument/Metadata/Information/Image/Dimensions/Channels/Channel",
+    xml_path_context );
+  if( xml_path_object && xml_path_object->nodesetval )
+    channel_count = xml_path_object->nodesetval->nodeNr;
+  xmlXPathFreeObject( xml_path_object );
+  g_hash_table_insert( osr->properties, g_strdup(ZEISS_CH_COUNT),
+    _openslide_format_double(channel_count) );
+  for( int32_t i=0; i<channel_count; ++i )
+  {
+    ZEISS_SET_PROP( osr, xml_path_context, ZEISS_CH_NAME,
+      "/ImageDocument/Metadata/Information/Image/Dimensions/Channels/Channel[%d]"
+      "/@Name", i );
+    ZEISS_SET_PROP( osr, xml_path_context, ZEISS_CH_PIXEL_TYPE,
+      "/ImageDocument/Metadata/Information/Image/Dimensions/Channels/Channel[%d]"
+      "/PixelType", i );
+    ZEISS_SET_PROP( osr, xml_path_context, ZEISS_CH_BIT_COUNT,
+      "/ImageDocument/Metadata/Information/Image/Dimensions/Channels/Channel[%d]"
+      "/ComponentBitcount", i );
+    ZEISS_SET_PROP( osr, xml_path_context, ZEISS_CH_ACQMODE,
+      "/ImageDocument/Metadata/Information/Image/Dimensions/Channels/Channel[%d]"
+      "/AcquisitionMode", i );
+    ZEISS_SET_PROP( osr, xml_path_context, ZEISS_CH_ILTYPE,
+      "/ImageDocument/Metadata/Information/Image/Dimensions/Channels/Channel[%d]"
+      "/IlluminationType", i );
+    ZEISS_SET_PROP( osr, xml_path_context, ZEISS_CH_CONTRAST,
+      "/ImageDocument/Metadata/Information/Image/Dimensions/Channels/Channel[%d]"
+      "/ContrastMethod", i );
+    ZEISS_SET_PROP( osr, xml_path_context, ZEISS_CH_FLUOR,
+      "/ImageDocument/Metadata/Information/Image/Dimensions/Channels/Channel[%d]"
+      "/Fluor", i );
+    ZEISS_SET_PROP( osr, xml_path_context, ZEISS_CH_COLOR,
+      "/ImageDocument/Metadata/Information/Image/Dimensions/Channels/Channel[%d]"
+      "/Color", i );
+    ZEISS_SET_PROP( osr, xml_path_context, ZEISS_CH_EXPTIME,
+      "/ImageDocument/Metadata/Information/Image/Dimensions/Channels/Channel[%d]"
+      "/ExposureTime", i );
+    ZEISS_SET_PROP( osr, xml_path_context, ZEISS_CH_THCK,
+      "/ImageDocument/Metadata/Information/Image/Dimensions/Channels/Channel[%d]"
+      "/SectionThickness", i );
+  }
+
+  // Information / Instrument / Objectives
+  int32_t obj_count = 0;
+  xml_path_object = xmlXPathEvalExpression(BAD_CAST 
+    "/ImageDocument/Metadata/Information/Instrument/Objectives/Objective",
+    xml_path_context );
+  if( xml_path_object && xml_path_object->nodesetval )
+    obj_count = xml_path_object->nodesetval->nodeNr;
+  xmlXPathFreeObject( xml_path_object );
+  g_hash_table_insert( osr->properties, g_strdup(ZEISS_OBJ_COUNT), _openslide_format_double(obj_count) );
+  for( int32_t i=0; i<obj_count; ++i )
+  {
+    ZEISS_SET_PROP( osr, xml_path_context, ZEISS_OBJ_NAME,
+      "/ImageDocument/Metadata/Information/Instrument/Objectives/Objective[%d]"
+      "/ObjectiveName", i );
+    ZEISS_SET_PROP( osr, xml_path_context, ZEISS_OBJ_LENSNA,
+      "/ImageDocument/Metadata/Information/Instrument/Objectives/Objective[%d]"
+      "/LensNA", i );
+    ZEISS_SET_PROP( osr, xml_path_context, ZEISS_OBJ_MAGN,
+      "/ImageDocument/Metadata/Information/Instrument/Objectives/Objective[%d]"
+      "/NominalMagnification", i );
+    ZEISS_SET_PROP( osr, xml_path_context, ZEISS_OBJ_DIST,
+      "/ImageDocument/Metadata/Information/Instrument/Objectives/Objective[%d]"
+      "/WorkingDistance", i );
+    ZEISS_SET_PROP( osr, xml_path_context, ZEISS_OBJ_GEOM,
+      "/ImageDocument/Metadata/Information/Instrument/Objectives/Objective[%d]"
+      "/PupilGeometry", i );
+    ZEISS_SET_PROP( osr, xml_path_context, ZEISS_OBJ_IMMERSION,
+      "/ImageDocument/Metadata/Information/Instrument/Objectives/Objective[%d]"
+      "/Immersion", i );
+  }
+
+  // Scaling
+  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_SC_X,
     "/ImageDocument/Metadata/Scaling/Items/Distance[@Id='X']/Value" );
-
-  _openslide_xml_set_prop_from_xpath( osr, xml_path_context,
-    "zeiss.scaling.items.distance-x.default-unit-format",
-    "/ImageDocument/Metadata/Scaling/Items/Distance[@Id='X']/DefaultUnitFormat" );
-
-  _openslide_xml_set_prop_from_xpath( osr, xml_path_context,
-    "zeiss.scaling.items.distance-y.value",
+  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_SC_Y,
     "/ImageDocument/Metadata/Scaling/Items/Distance[@Id='Y']/Value" );
 
-  _openslide_xml_set_prop_from_xpath( osr, xml_path_context,
-    "zeiss.scaling.items.distance-y.default-unit-format",
-    "/ImageDocument/Metadata/Scaling/Items/Distance[@Id='Y']/DefaultUnitFormat" );
-  
+  // Experiment / AcquisitionBlocks
+  int32_t block_count = 0;
+  xml_path_object = xmlXPathEvalExpression(BAD_CAST 
+    "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock",
+    xml_path_context );
+  if( xml_path_object && xml_path_object->nodesetval )
+    block_count = xml_path_object->nodesetval->nodeNr;
+  xmlXPathFreeObject( xml_path_object );
+  g_hash_table_insert( osr->properties,
+    g_strdup(ZEISS_ACQBLOCK_COUNT),
+    _openslide_format_double(block_count) );
+  for( int32_t i=0; i<block_count; ++i )
+  {
+    ZEISS_SET_PROP( osr, xml_path_context, ZEISS_OVERLAP,
+      "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d]"
+      "/SubDimensionSetups/RegionsSetup/SampleHolder/Overlap", i );
+    ZEISS_SET_PROP( osr, xml_path_context, ZEISS_COVERING_MODE,
+      "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d]"
+      "/SubDimensionSetups/RegionsSetup/SampleHolder/TileRegionCoveringMode", i );
+
+    int32_t region_count = 0;
+    char * path = g_strdup_printf(
+      "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d]"
+      "/SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion", i+1 );
+    xml_path_object = xmlXPathEvalExpression(BAD_CAST path, xml_path_context );
+    if( xml_path_object && xml_path_object->nodesetval )
+      region_count = xml_path_object->nodesetval->nodeNr;
+    xmlXPathFreeObject( xml_path_object );
+    g_free( path );
+    g_hash_table_insert( osr->properties,
+      g_strdup_printf( ZEISS_TILEREGION_COUNT, i ),
+      _openslide_format_double(region_count) );
+
+    for( int32_t j=0; j<region_count; ++j )
+    {
+      ZEISS_SET_PROP2( osr, xml_path_context, ZEISS_TILEREGION_CENTER,
+        "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d]"
+        "/SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d]"
+        "/CenterPosition", i, j );
+      ZEISS_SET_PROP2( osr, xml_path_context, ZEISS_TILEREGION_CONTOUR,
+        "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d]"
+        "/SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d]"
+        "/ContourSize", i, j );
+      ZEISS_SET_PROP2( osr, xml_path_context, ZEISS_TILEREGION_COLUMNS,
+        "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d]"
+        "/SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d]"
+        "/Columns", i, j );
+      ZEISS_SET_PROP2( osr, xml_path_context, ZEISS_TILEREGION_ROWS,
+        "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d]"
+        "/SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d]"
+        "/Rows", i, j );
+      ZEISS_SET_PROP2( osr, xml_path_context, ZEISS_TILEREGION_Z,
+        "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d]"
+        "/SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d]"
+        "/Z", i, j );
+      ZEISS_SET_PROP2( osr, xml_path_context, ZEISS_TILEREGION_ACQ,
+        "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d]"
+        "/SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d]"
+        "/IsUsedForAcquisition", i, j );
+      ZEISS_SET_PROP2( osr, xml_path_context, ZEISS_TILEREGION_PROTECT,
+        "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d]"
+        "/SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d]"
+        "/IsProtected", i, j );
+      ZEISS_SET_PROP2( osr, xml_path_context, ZEISS_TILEREGION_CTYPE,
+        "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d]"
+        "/SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d]"
+        "/Contour/@Type", i, j );
+    }
+  }
+
+  xmlFreeDoc( xml_doc );
+  xmlXPathFreeContext( xml_path_context );
+
+  //--- set openslide properties ---------------------------------------------
+
+  double mpp;
+  mpp = 0;
+  mpp = _openslide_parse_double( (const char*)g_hash_table_lookup( osr->properties, ZEISS_VOXELSIZE_X ) );
+  mpp *= 1e6;
+  g_hash_table_insert( osr->properties, g_strdup( OPENSLIDE_PROPERTY_NAME_MPP_X ), _openslide_format_double(mpp) );
+
+  mpp = 0;
+  mpp = _openslide_parse_double( (const char*)g_hash_table_lookup( osr->properties, ZEISS_VOXELSIZE_Y ) );
+  mpp *= 1e6;
+  g_hash_table_insert( osr->properties, g_strdup( OPENSLIDE_PROPERTY_NAME_MPP_Y ), _openslide_format_double(mpp) );
+
+  _openslide_duplicate_int_prop( osr, ZEISS_MAGNIFICATION, OPENSLIDE_PROPERTY_NAME_OBJECTIVE_POWER );
+
+  const char * bg = (const char *) g_hash_table_lookup( osr->properties, ZEISS_BG_COLOR );
+  if( bg )
+  {
+    uint8_t orig = 1;
+    if( strlen(bg) == 9 ) orig = 3;
+    char * red = g_strndup( bg+orig, 2 );
+    char * green = g_strndup( bg+orig+2, 2 );
+    char * blue = g_strndup( bg+orig+4, 2 );
+    _openslide_set_background_color_prop( osr,
+      strtol(red,NULL,16), strtol(green,NULL,16), strtol(blue,NULL,16) );
+    g_free( red );
+    g_free( green );
+    g_free( blue );
+  }
+
+  return true;
+}
+
+bool zeiss_set_levels(
+  openslide_t     * osr,
+  _openslide_czi  * czi,
+  GError         ** err
+)
+{
+  int32_t subsampling, th, tw;
+  char *w, *h;
+  int32_t level_count = _openslide_czi_get_level_count( czi );
+  GPtrArray * array_levels = g_ptr_array_sized_new( level_count );
+  struct _openslide_level * level;
+
+  for( int32_t i=0; i<level_count; ++i )
+  {
+    subsampling = _openslide_czi_get_level_subsampling( czi, i, err );
+    if( subsampling == 0 ) {
+      osr->level_count = i;
+      zeiss_destroy( osr );
+      return false;
+    }
+    level = g_slice_alloc0( sizeof( struct _openslide_level ) );
+    level->downsample = (double) subsampling;
+    w = g_hash_table_lookup( osr->properties, ZEISS_VOXELSIZE_X );
+    level->w = (int64_t)( _openslide_parse_double( w ) / level->downsample );
+    h = g_hash_table_lookup( osr->properties, ZEISS_VOXELSIZE_Y );
+    level->h = (int64_t)( _openslide_parse_double( h ) / level->downsample );
+    if( !_openslide_czi_get_level_tile_size( czi, i, &tw, &th, err ) ) {
+      g_slice_free( struct _openslide_level, level );
+      osr->level_count = i;
+      zeiss_destroy( osr );
+      return false;
+    }
+    level->tile_w = (int64_t) tw;
+    level->tile_h = (int64_t) th;
+    g_ptr_array_add( array_levels, level );
+  }
+
+  osr->level_count = level_count;
+  osr->levels = ( struct _openslide_level **) g_ptr_array_free( array_levels, false );
   return true;
 }
 
@@ -1739,31 +2620,36 @@ void zeiss_destroy(
   openslide_t * osr
 )
 {
+  if( osr->data )
+    _openslide_czi_free( (_openslide_czi *) osr->data );
+  for( int32_t i=0; i<osr->level_count; ++i )
+    g_slice_free( struct _openslide_level, osr->levels[i] );
+  g_free( osr->levels );
   return;
 }
 
 bool zeiss_paint_region(
-  openslide_t               * osr,
-  cairo_t                   * cr,
-  int64_t                     x,
-  int64_t                     y,
-  struct _openslide_level   * level,
-  int32_t                     w,
-  int32_t                     h,
-  GError                   ** err
+  openslide_t               * osr    G_GNUC_UNUSED,
+  cairo_t                   * cr     G_GNUC_UNUSED,
+  int64_t                     x      G_GNUC_UNUSED,
+  int64_t                     y      G_GNUC_UNUSED,
+  struct _openslide_level   * level  G_GNUC_UNUSED,
+  int32_t                     w      G_GNUC_UNUSED,
+  int32_t                     h      G_GNUC_UNUSED,
+  GError                   ** err    G_GNUC_UNUSED
 )
 {
   return true;
 }
 
 bool zeiss_tileread(
-  openslide_t               * osr,
-  cairo_t                   * cr,
-  struct _openslide_level   * level,
-  int64_t                     tile_col,
-  int64_t                     tile_row,
-  void                      * arg,
-  GError                   ** err
+  openslide_t               * osr       G_GNUC_UNUSED,
+  cairo_t                   * cr        G_GNUC_UNUSED,
+  struct _openslide_level   * level     G_GNUC_UNUSED,
+  int64_t                     tile_col  G_GNUC_UNUSED,
+  int64_t                     tile_row  G_GNUC_UNUSED,
+  void                      * arg       G_GNUC_UNUSED,
+  GError                   ** err       G_GNUC_UNUSED
 )
 {
   // For simple grid
@@ -1773,25 +2659,26 @@ bool zeiss_tileread(
 }
 
 bool zeiss_tilemap(
-  openslide_t               * osr,
-  cairo_t                   * cr,
-  struct _openslide_level   * level,
-  int64_t                     tile_col,
-  int64_t                     tile_row,
-  void                      * tile,
-  void                      * arg,
-  GError                   ** err
+  openslide_t               * osr       G_GNUC_UNUSED,
+  cairo_t                   * cr        G_GNUC_UNUSED,
+  struct _openslide_level   * level     G_GNUC_UNUSED,
+  int64_t                     tile_col  G_GNUC_UNUSED,
+  int64_t                     tile_row  G_GNUC_UNUSED,
+  void                      * tile      G_GNUC_UNUSED,
+  void                      * arg       G_GNUC_UNUSED,
+  GError                   ** err       G_GNUC_UNUSED
 )
 {
+  // For mapped grid
   return true;
 }
 
 void zeiss_tilemap_foreach(
-  struct _openslide_grid  * grid,
-  int64_t                   tile_col,
-  int64_t                   tile_row,
-  void                    * tile,
-  void                    * arg
+  struct _openslide_grid  * grid      G_GNUC_UNUSED,
+  int64_t                   tile_col  G_GNUC_UNUSED,
+  int64_t                   tile_row  G_GNUC_UNUSED,
+  void                    * tile      G_GNUC_UNUSED,
+  void                    * arg       G_GNUC_UNUSED
 )
 {
   // I don't know if I need this
@@ -1805,7 +2692,6 @@ bool zeiss_detect(
 )
 {
   g_debug( "zeiss_detect" );
-  // ensure we have a zisraw file
   if( !_openslide_czi_is_zisraw( filename, err ) )
     return false;
 
@@ -1817,24 +2703,77 @@ bool zeiss_detect(
 bool zeiss_open(
   openslide_t                 * osr,
   const char                  * filename,
-  struct _openslide_tifflike  * tl G_GNUC_UNUSED,
-  struct _openslide_hash      * quickhash1,
+  struct _openslide_tifflike  * tl          G_GNUC_UNUSED,
+  struct _openslide_hash      * quickhash1  G_GNUC_UNUSED,
   GError                     ** err
 )
 {
   g_debug( "zeiss_open" );
-  _openslide_czi * czi_descriptor = NULL;
-  czi_descriptor = _openslide_czi_decode( filename, err );
+  _openslide_czi * czi_descriptor = _openslide_czi_decode( filename, err );
   if( !czi_descriptor )
     return false;
-  osr->data = (void*) czi_descriptor;
 
-  // try read metadata
-  if( !zeiss_set_properties( osr, (_openslide_czi*) osr->data, err ) )
+  if( !zeiss_check( czi_descriptor, err ) ) {
+    _openslide_czi_free( czi_descriptor );
     return false;
+  }
 
-  osr->level_count = _openslide_czi_get_level_count( (_openslide_czi*) osr->data, 0 );
+  if( !zeiss_set_properties( osr, czi_descriptor, err ) ){
+    _openslide_czi_free( czi_descriptor );
+    return false;
+  }
 
+  if( !zeiss_set_levels( osr, czi_descriptor, err ) ){
+    _openslide_czi_free( czi_descriptor );
+    return false;
+  }
+
+// testouille diverse
+#if 0
+  osr->level_count = _openslide_czi_get_level_count( czi_descriptor );
+  printf( "nb levels: %d\n", osr->level_count );
+  int32_t level_ss1 = 0;
+  for( int32_t i=0; i< osr->level_count; ++i ) {
+    printf( "level %d: subsampling %d\n", i, _openslide_czi_get_level_subsampling( czi_descriptor, i, 0 ) );
+    if( _openslide_czi_get_level_subsampling( czi_descriptor, i, 0 ) == 1 )
+      level_ss1 = i;
+  }
+
+  GList * list_tiles = _openslide_czi_get_level_tiles( czi_descriptor, level_ss1, err );
+  if( !list_tiles ) return false;
+  int32_t tile_count = 0;
+  GList * current = list_tiles; // struct _openslide_czi_tile_descriptor * tile;
+  while( current )
+  {
+    // tile = (struct _openslide_czi_tile_descriptor *) current->data;
+    // printf( "-----------------------------------------------------------\n" );
+    // printf( "uid: %ld, pixel_type: %d, compression: %d, pyramid_type: %d\n",
+    //   tile->uid, tile->pixel_type, tile->compression, tile->pyramid_type );
+    // printf( "ss_x: %d, ss_y: %d, start_x: %d, start_y: %d, size_x: %d, size_y: %d\n",
+    //   tile->subsampling_x, tile->subsampling_y, tile->start_x,
+    //   tile->start_y, tile->size_x, tile->size_y );
+    tile_count++;
+    current = g_list_next( current );
+  }
+  // printf( "-----------------------------------------------------------\n" );
+  printf( "nb tiles in level %d: %d\n", level_ss1, tile_count );
+
+  // TODO: compute grid using xml properties and tile sizes
+
+  _openslide_czi_free_list_tiles( list_tiles );
+#endif
+
+  osr->data = (void*) czi_descriptor;
+  osr->ops = &_openslide_ops_zeiss;
 
   return true;
+
+  // Note:
+  // Maybe I don't free enough stuff on failure. I don't know what's done 
+  // in openslide.c when backend "open" functions failed ?
+  // Should I free all levels, properties, etc here ?
+  // 
+  // After a little thinking, and looking into openslide.c
+  // I guess properties will be destroyed at closing (hash table with free 
+  // function). However, levels should definitely be destroyed here.
 }
