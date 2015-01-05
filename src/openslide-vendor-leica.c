@@ -42,7 +42,8 @@
 #include <libxml/tree.h>
 #include <libxml/xpath.h>
 
-static const char LEICA_XMLNS[] = "http://www.leica-microsystems.com/scn/2010/10/01";
+static const char LEICA_XMLNS_1[] = "http://www.leica-microsystems.com/scn/2010/03/10";
+static const char LEICA_XMLNS_2[] = "http://www.leica-microsystems.com/scn/2010/10/01";
 static const char LEICA_ATTR_SIZE_X[] = "sizeX";
 static const char LEICA_ATTR_SIZE_Y[] = "sizeY";
 static const char LEICA_ATTR_OFFSET_X[] = "offsetX";
@@ -263,7 +264,8 @@ static bool leica_detect(const char *filename G_GNUC_UNUSED,
   if (!image_desc) {
     return false;
   }
-  if (!strstr(image_desc, LEICA_XMLNS)) {
+  if (!strstr(image_desc, LEICA_XMLNS_1) &&
+      !strstr(image_desc, LEICA_XMLNS_2)) {
     g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                 "Not a Leica slide");
     return false;
@@ -276,7 +278,8 @@ static bool leica_detect(const char *filename G_GNUC_UNUSED,
   }
 
   // check default namespace
-  if (!_openslide_xml_has_default_namespace(doc, LEICA_XMLNS)) {
+  if (!_openslide_xml_has_default_namespace(doc, LEICA_XMLNS_1) &&
+      !_openslide_xml_has_default_namespace(doc, LEICA_XMLNS_2)) {
     g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                 "Unexpected XML namespace");
     xmlFreeDoc(doc);
@@ -340,8 +343,8 @@ static void set_resolution_prop(openslide_t *osr, TIFF *tiff,
   }
 }
 
-static void set_bounds_props(openslide_t *osr,
-                             struct level *level0) {
+static void set_region_bounds_props(openslide_t *osr,
+                                    struct level *level0) {
   int64_t x0 = INT64_MAX;
   int64_t y0 = INT64_MAX;
   int64_t x1 = INT64_MIN;
@@ -350,6 +353,18 @@ static void set_bounds_props(openslide_t *osr,
   g_assert(level0->areas->len);
   for (uint32_t n = 0; n < level0->areas->len; n++) {
     struct area *area = level0->areas->pdata[n];
+    g_hash_table_insert(osr->properties,
+                        g_strdup_printf(_OPENSLIDE_PROPERTY_NAME_TEMPLATE_REGION_X, n),
+                        g_strdup_printf("%"PRId64, area->offset_x));
+    g_hash_table_insert(osr->properties,
+                        g_strdup_printf(_OPENSLIDE_PROPERTY_NAME_TEMPLATE_REGION_Y, n),
+                        g_strdup_printf("%"PRId64, area->offset_y));
+    g_hash_table_insert(osr->properties,
+                        g_strdup_printf(_OPENSLIDE_PROPERTY_NAME_TEMPLATE_REGION_WIDTH, n),
+                        g_strdup_printf("%"PRId64, area->tiffl.image_w));
+    g_hash_table_insert(osr->properties,
+                        g_strdup_printf(_OPENSLIDE_PROPERTY_NAME_TEMPLATE_REGION_HEIGHT, n),
+                        g_strdup_printf("%"PRId64, area->tiffl.image_h));
     x0 = MIN(x0, area->offset_x);
     y0 = MIN(y0, area->offset_y);
     x1 = MAX(x1, area->offset_x + area->tiffl.image_w);
@@ -391,7 +406,7 @@ static struct collection *parse_xml_description(const char *xml,
   /*
     scn (root node)
       collection
-        barcode
+        barcode		(2010/10/01 namespace only)
         image
           dimension
           dimension
@@ -413,7 +428,12 @@ static struct collection *parse_xml_description(const char *xml,
   collection = g_slice_new0(struct collection);
   collection->images = g_ptr_array_new();
 
+  // Get barcode as stored in 2010/10/01 namespace
   collection->barcode = _openslide_xml_xpath_get_string(ctx, "/d:scn/d:collection/d:barcode/text()");
+  if (!collection->barcode) {
+    // Fall back to 2010/03/10 namespace
+    collection->barcode = _openslide_xml_xpath_get_string(ctx, "/d:scn/d:collection/@barcode");
+  }
 
   PARSE_INT_ATTRIBUTE_OR_FAIL(collection_node, LEICA_ATTR_SIZE_X,
                               collection->nm_across);
@@ -829,8 +849,8 @@ static bool leica_open(openslide_t *osr, const char *filename,
   set_resolution_prop(osr, tiff, OPENSLIDE_PROPERTY_NAME_MPP_Y,
                       TIFFTAG_YRESOLUTION);
 
-  // set bounds properties
-  set_bounds_props(osr, level0);
+  // set region bounds properties
+  set_region_bounds_props(osr, level0);
 
   // unwrap level array
   int32_t level_count = level_array->len;
