@@ -38,6 +38,7 @@
 #include <glib.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 #include <tiffio.h>
 
 static const char APERIO_DESCRIPTION[] = "Aperio";
@@ -53,6 +54,8 @@ struct level {
   struct _openslide_level base;
   struct _openslide_tiff_level tiffl;
   struct _openslide_grid *grid;
+  struct level *prev;
+  GHashTable *missing_tiles;
   uint16_t compression;
 };
 
@@ -66,6 +69,9 @@ static void destroy_data(struct aperio_ops_data *data,
   if (levels) {
     for (int32_t i = 0; i < level_count; i++) {
       if (levels[i]) {
+        if (levels[i]->missing_tiles) {
+          g_hash_table_destroy(levels[i]->missing_tiles);
+        }
         _openslide_grid_destroy(levels[i]->grid);
         g_slice_free(struct level, levels[i]);
       }
@@ -80,36 +86,51 @@ static void destroy(openslide_t *osr) {
   destroy_data(data, levels, osr->level_count);
 }
 
-static bool check_for_empty_tile(struct _openslide_tiff_level *tiffl,
-                                 TIFF *tiff,
-                                 int64_t tile_col, int64_t tile_row,
-                                 bool *is_empty,
-                                 GError **err) {
-  // set directory
-  if (!_openslide_tiff_set_dir(tiff, tiffl->dir, err)) {
-    return false;
+static bool render_missing_tile(struct level *l,
+                                TIFF *tiff,
+                                uint32_t *dest,
+                                int64_t tile_col, int64_t tile_row,
+                                GError **err) {
+  bool success = true;
+
+  int64_t tw = l->tiffl.tile_w;
+  int64_t th = l->tiffl.tile_h;
+
+  // always fill with transparent (needed for SATURATE)
+  memset(dest, 0, tw * th * 4);
+
+  if (l->prev) {
+    // recurse into previous level
+    double relative_ds = l->prev->base.downsample / l->base.downsample;
+
+    cairo_surface_t *surface =
+      cairo_image_surface_create_for_data((unsigned char *) dest,
+                                          CAIRO_FORMAT_ARGB32,
+                                          tw, th, tw * 4);
+    cairo_t *cr = cairo_create(surface);
+    cairo_surface_destroy(surface);
+    cairo_set_operator(cr, CAIRO_OPERATOR_SATURATE);
+    cairo_translate(cr, -1, -1);
+    cairo_scale(cr, relative_ds, relative_ds);
+
+    // For the usual case that we are on a tile boundary in the previous
+    // level, extend the region by one pixel in each direction to ensure we
+    // paint the surrounding tiles.  This reduces the visible seam that
+    // would otherwise occur with non-integer downsamples.
+    success = _openslide_grid_paint_region(l->prev->grid, cr, tiff,
+                                           (tile_col * tw - 1) / relative_ds,
+                                           (tile_row * th - 1) / relative_ds,
+                                           (struct _openslide_level *) l->prev,
+                                           ceil((tw + 2) / relative_ds),
+                                           ceil((th + 2) / relative_ds),
+                                           err);
+    if (success) {
+      success = _openslide_check_cairo_status(cr, err);
+    }
+    cairo_destroy(cr);
   }
 
-  // get tile number
-  ttile_t tile_no = TIFFComputeTile(tiff,
-                                    tile_col * tiffl->tile_w,
-                                    tile_row * tiffl->tile_h,
-                                    0, 0);
-
-  //g_debug("check_for_empty_tile: tile %d", tile_no);
-
-  // get tile size
-  toff_t *sizes;
-  if (!TIFFGetField(tiff, TIFFTAG_TILEBYTECOUNTS, &sizes)) {
-    g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                "Cannot get tile size");
-    return false;
-  }
-  tsize_t tile_size = sizes[tile_no];
-
-  // return result
-  *is_empty = tile_size == 0;
-  return true;
+  return success;
 }
 
 static bool decode_tile(struct level *l,
@@ -119,18 +140,12 @@ static bool decode_tile(struct level *l,
                         GError **err) {
   struct _openslide_tiff_level *tiffl = &l->tiffl;
 
-  // some Aperio slides have some zero-length tiles, possibly due to an
-  // encoder bug
-  bool is_empty;
-  if (!check_for_empty_tile(tiffl, tiff,
-                            tile_col, tile_row,
-                            &is_empty, err)) {
-    return false;
-  }
-  if (is_empty) {
-    // fill with transparent
-    memset(dest, 0, tiffl->tile_w * tiffl->tile_h * 4);
-    return true;
+  // check for missing tile
+  int64_t tile_no = tile_row * tiffl->tiles_across + tile_col;
+  if (g_hash_table_lookup_extended(l->missing_tiles, &tile_no, NULL, NULL)) {
+    //g_debug("missing tile in level %p: (%"PRId64", %"PRId64")", (void *) l, tile_col, tile_row);
+    return render_missing_tile(l, tiff, dest,
+                               tile_col, tile_row, err);
   }
 
   // select color space
@@ -278,7 +293,7 @@ static bool aperio_detect(const char *filename G_GNUC_UNUSED,
   if (!tagval) {
     return false;
   }
-  if (strncmp(APERIO_DESCRIPTION, tagval, strlen(APERIO_DESCRIPTION))) {
+  if (!g_str_has_prefix(tagval, APERIO_DESCRIPTION)) {
     g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                 "Not an Aperio slide");
     return false;
@@ -364,6 +379,32 @@ static bool add_associated_image(openslide_t *osr,
                                                      err);
   g_free(name);
   return result;
+}
+
+static void propagate_missing_tile(void *key, void *value G_GNUC_UNUSED,
+                                   void *data) {
+  const int64_t *tile_no = key;
+  struct level *next_l = data;
+  struct level *l = next_l->prev;
+  struct _openslide_tiff_level *tiffl = &l->tiffl;
+  struct _openslide_tiff_level *next_tiffl = &next_l->tiffl;
+
+  int64_t tile_col = *tile_no % tiffl->tiles_across;
+  int64_t tile_row = *tile_no / tiffl->tiles_across;
+
+  int64_t tile_concat_x = round((double) tiffl->tiles_across /
+                                next_tiffl->tiles_across);
+  int64_t tile_concat_y = round((double) tiffl->tiles_down /
+                                next_tiffl->tiles_down);
+
+  int64_t next_tile_col = tile_col / tile_concat_x;
+  int64_t next_tile_row = tile_row / tile_concat_y;
+
+  //g_debug("propagating %p (%"PRId64", %"PRId64") to %p (%"PRId64", %"PRId64")", (void *) l, tile_col, tile_row, (void *) next_l, next_tile_col, next_tile_row);
+
+  int64_t *next_tile_no = g_new(int64_t, 1);
+  *next_tile_no = next_tile_row * next_tiffl->tiles_across + next_tile_col;
+  g_hash_table_insert(next_l->missing_tiles, next_tile_no, NULL);
 }
 
 // check for OpenJPEG CVE-2013-6045 breakage
@@ -469,6 +510,9 @@ static bool aperio_open(openslide_t *osr,
       //g_debug("tiled directory: %d", dir);
       struct level *l = g_slice_new0(struct level);
       struct _openslide_tiff_level *tiffl = &l->tiffl;
+      if (i) {
+        l->prev = levels[i - 1];
+      }
       levels[i++] = l;
 
       if (!_openslide_tiff_level_init(tiff,
@@ -492,6 +536,25 @@ static bool aperio_open(openslide_t *osr,
                     "Can't read compression scheme");
         goto FAIL;
       }
+
+      // some Aperio slides have some zero-length tiles, apparently due to
+      // an encoder bug
+      toff_t *tile_sizes;
+      if (!TIFFGetField(tiff, TIFFTAG_TILEBYTECOUNTS, &tile_sizes)) {
+        g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                    "Cannot get tile sizes");
+        goto FAIL;
+      }
+      l->missing_tiles = g_hash_table_new_full(g_int64_hash, g_int64_equal,
+                                               g_free, NULL);
+      for (ttile_t tile_no = 0;
+           tile_no < tiffl->tiles_across * tiffl->tiles_down; tile_no++) {
+        if (tile_sizes[tile_no] == 0) {
+          int64_t *p_tile_no = g_new(int64_t, 1);
+          *p_tile_no = tile_no;
+          g_hash_table_insert(l->missing_tiles, p_tile_no, NULL);
+        }
+      }
     } else {
       // associated image
       const char *name = (dir == 1) ? "thumbnail" : NULL;
@@ -501,6 +564,13 @@ static bool aperio_open(openslide_t *osr,
       //g_debug("associated image: %d", dir);
     }
   } while (TIFFReadDirectory(tiff));
+
+  // tiles concatenating a missing tile are sometimes corrupt, so we mark
+  // them missing too
+  for (i = 0; i < level_count - 1; i++) {
+    g_hash_table_foreach(levels[i]->missing_tiles, propagate_missing_tile,
+                         levels[i + 1]);
+  }
 
   // check for OpenJPEG CVE-2013-6045 breakage
   if (!test_tile_decoding(levels[0], tiff, err)) {

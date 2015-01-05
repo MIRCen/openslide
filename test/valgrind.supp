@@ -6,7 +6,6 @@
    Memcheck:Leak
    ...
    fun:g_type_init_with_debug_flags
-   fun:_openslide_init
 }
 {
    New GObject constructor leaks
@@ -19,6 +18,18 @@
    Memcheck:Leak
    ...
    fun:g_type_register_static
+}
+{
+   GType registration
+   Memcheck:Leak
+   ...
+   fun:g_type_register_fundamental
+}
+{
+   GType registration
+   Memcheck:Leak
+   ...
+   fun:g_type_add_interface_static
 }
 {
    GType referencing
@@ -34,5 +45,4 @@
     ...
     fun:FcPatternObjectInsertElt
     fun:FcPatternObjectAddWithBinding
-    fun:FcPatternDuplicate
 }

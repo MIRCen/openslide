@@ -22,10 +22,6 @@
 #ifndef OPENSLIDE_OPENSLIDE_PRIVATE_H_
 #define OPENSLIDE_OPENSLIDE_PRIVATE_H_
 
-#ifdef _WIN32
-#define WIN32 1
-#endif
-
 #include <config.h>
 
 #include "openslide.h"
@@ -34,6 +30,7 @@
 #include <glib.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <inttypes.h>
 
 #include <cairo.h>
 
@@ -178,38 +175,40 @@ bool _openslide_clip_tile(uint32_t *tiledata,
 // Grid helpers
 struct _openslide_grid;
 
-typedef bool (*_openslide_tileread_fn)(openslide_t *osr,
-                                       cairo_t *cr,
-                                       struct _openslide_level *level,
-                                       int64_t tile_col, int64_t tile_row,
-                                       void *arg,
-                                       GError **err);
+typedef bool (*_openslide_grid_simple_read_fn)(openslide_t *osr,
+                                               cairo_t *cr,
+                                               struct _openslide_level *level,
+                                               int64_t tile_col, int64_t tile_row,
+                                               void *arg,
+                                               GError **err);
 
-typedef bool (*_openslide_tilemap_fn)(openslide_t *osr,
-                                      cairo_t *cr,
-                                      struct _openslide_level *level,
-                                      int64_t tile_col, int64_t tile_row,
-                                      void *tile,
-                                      void *arg,
-                                      GError **err);
+typedef bool (*_openslide_grid_tilemap_read_fn)(openslide_t *osr,
+                                                cairo_t *cr,
+                                                struct _openslide_level *level,
+                                                int64_t tile_col, int64_t tile_row,
+                                                void *tile,
+                                                void *arg,
+                                                GError **err);
 
-typedef void (*_openslide_tilemap_foreach_fn)(struct _openslide_grid *grid,
-                                              int64_t tile_col,
-                                              int64_t tile_row,
+typedef bool (*_openslide_grid_range_read_fn)(openslide_t *osr,
+                                              cairo_t *cr,
+                                              struct _openslide_level *level,
+                                              int64_t tile_unique_id,
                                               void *tile,
-                                              void *arg);
+                                              void *arg,
+                                              GError **err);
 
 struct _openslide_grid *_openslide_grid_create_simple(openslide_t *osr,
                                                       int64_t tiles_across,
                                                       int64_t tiles_down,
                                                       int32_t tile_w,
                                                       int32_t tile_h,
-                                                      _openslide_tileread_fn read_tile);
+                                                      _openslide_grid_simple_read_fn read_tile);
 
 struct _openslide_grid *_openslide_grid_create_tilemap(openslide_t *osr,
                                                        double tile_advance_x,
                                                        double tile_advance_y,
-                                                       _openslide_tilemap_fn read_tile,
+                                                       _openslide_grid_tilemap_read_fn read_tile,
                                                        GDestroyNotify destroy_tile);
 
 void _openslide_grid_tilemap_add_tile(struct _openslide_grid *grid,
@@ -218,12 +217,19 @@ void _openslide_grid_tilemap_add_tile(struct _openslide_grid *grid,
                                       double w, double h,
                                       void *data);
 
-void *_openslide_grid_tilemap_get_tile(struct _openslide_grid *_grid,
-                                       int64_t col, int64_t row);
+struct _openslide_grid *_openslide_grid_create_range(openslide_t *osr,
+                                                     _openslide_grid_range_read_fn read_tile,
+                                                     GDestroyNotify destroy_tile,
+                                                     GError **err);
 
-void _openslide_grid_tilemap_foreach(struct _openslide_grid *grid,
-                                     _openslide_tilemap_foreach_fn func,
-                                     void *arg);
+bool _openslide_grid_range_add_tile(struct _openslide_grid *_grid,
+                                    double x, double y,
+                                    double w, double h,
+                                    void *data,
+                                    GError **err);
+
+bool _openslide_grid_range_finish_adding_tiles(struct _openslide_grid *_grid,
+                                               GError **err);
 
 void _openslide_grid_get_bounds(struct _openslide_grid *grid,
                                 double *x, double *y,

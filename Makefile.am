@@ -86,11 +86,12 @@ noinst_HEADERS = \
 	src/openslide-error.h \
 	src/openslide-hash.h \
 	src/openslide-private.h \
+	test/test-common.h \
 	tools/openslide-tools-common.h
 
 
 noinst_PROGRAMS = test/test test/try_open test/parallel test/query \
-	test/extended
+	test/extended test/mosaic
 noinst_SCRIPTS = test/driver
 CLEANFILES += test/driver
 EXTRA_DIST += test/driver.in
@@ -99,6 +100,7 @@ test_test_CPPFLAGS = $(GLIB2_CFLAGS) $(CAIRO_CFLAGS) $(VALGRIND_CFLAGS) -I$(top_
 # VALGRIND_LIBS not needed
 test_test_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(CAIRO_LIBS)
 
+test_try_open_SOURCES = test/test-common.c test/try_open.c
 test_try_open_CPPFLAGS = $(GLIB2_CFLAGS) -I$(top_srcdir)/src
 test_try_open_LDADD = src/libopenslide.la $(GLIB2_LIBS)
 
@@ -108,16 +110,29 @@ test_parallel_LDADD = src/libopenslide.la $(GLIB2_LIBS)
 test_query_CPPFLAGS = $(GLIB2_CFLAGS) -I$(top_srcdir)/src
 test_query_LDADD = src/libopenslide.la $(GLIB2_LIBS)
 
+test_extended_SOURCES = test/test-common.c test/extended.c
 test_extended_CPPFLAGS = $(GLIB2_CFLAGS) -I$(top_srcdir)/src
 test_extended_LDADD = src/libopenslide.la $(GLIB2_LIBS)
 
+<<<<<<< HEAD
 # test_czireader_CPPFLAGS = $(src_libopenslide_la_CPPFLAGS)
 # test_czireader_LDADD = src/libopenslide.la $(src_libopenslide_la_LIBADD)
+=======
+test_mosaic_CPPFLAGS = $(GLIB2_CFLAGS) $(CAIRO_CFLAGS) -I$(top_srcdir)/src
+test_mosaic_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(CAIRO_LIBS)
+
+if CYGWIN_CROSS_TEST
+noinst_PROGRAMS += test/symlink
+test_symlink_LDADD = -lkernel32
+endif
+>>>>>>> 2091a1c940b39559148a1e684b37ed3e371f47fc
 
 test/driver: test/driver.in Makefile
 	$(AM_V_GEN)sed -e 's:!!SRCDIR!!:$(abs_srcdir)/test:g' \
 		-e 's:!!BUILDDIR!!:$(abs_builddir)/test:g' \
-		-e 's:!!VERSION!!:$(VERSION):g' "$<" > "$@" && \
+		-e 's:!!VERSION!!:$(VERSION):g' \
+		-e 's:!!CYGWIN_CROSS_TEST!!:$(CYGWIN_CROSS_TEST):g' \
+		-e 's:!!FEATURES!!:$(FEATURE_FLAGS):g' "$<" > "$@" && \
 		chmod +x "$@"
 
 

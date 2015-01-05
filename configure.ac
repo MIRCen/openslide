@@ -9,6 +9,10 @@ AM_INIT_AUTOMAKE([foreign subdir-objects 1.11.1 dist-xz])
 AM_SILENT_RULES([yes])
 AC_CONFIG_MACRO_DIR([m4])
 
+# Check for cross build
+AC_CANONICAL_BUILD
+AC_CANONICAL_HOST
+
 # Checks for programs.
 AM_PROG_CC_C_O
 AC_PROG_CC_C99
@@ -59,6 +63,7 @@ PKG_CHECK_MODULES(OPENJPEG2, [libopenjp2 >= 2.1.0], [
    AC_DEFINE([HAVE_OPENJPEG2], [1], [Define to 1 if you have OpenJPEG >= 2.1.0.])
    OPENJPEG_CFLAGS="$OPENJPEG2_CFLAGS"
    OPENJPEG_LIBS="$OPENJPEG2_LIBS"
+   FEATURE_FLAGS="$FEATURE_FLAGS openjpeg-2"
  ], [
   dnl Fall back to OpenJPEG 1.x
   PKG_CHECK_MODULES(OPENJPEG, [libopenjpeg1], [], [
@@ -93,6 +98,7 @@ PKG_CHECK_MODULES(OPENJPEG2, [libopenjp2 >= 2.1.0], [
       AC_MSG_FAILURE([cannot find OpenJPEG])
     fi
   ])
+  FEATURE_FLAGS="$FEATURE_FLAGS openjpeg-1"
 ])
 
 PKG_CHECK_MODULES(LIBTIFF, [libtiff-4], [], [
@@ -102,6 +108,17 @@ PKG_CHECK_MODULES(LIBTIFF, [libtiff-4], [], [
   LIBS="$old_LIBS"
   LIBTIFF_LIBS="-ltiff"
 ])
+old_CFLAGS="$CFLAGS"
+CFLAGS="$CFLAGS $LIBTIFF_CFLAGS"
+AC_COMPILE_IFELSE([AC_LANG_SOURCE([
+  #include <tiff.h>
+  int ver = TIFF_VERSION_BIG;
+])], [
+  FEATURE_FLAGS="$FEATURE_FLAGS libtiff-4"
+], [
+  FEATURE_FLAGS="$FEATURE_FLAGS libtiff-3"
+])
+CFLAGS="$old_CFLAGS"
 
 PKG_CHECK_MODULES(GLIB2, [glib-2.0 >= 2.16, gthread-2.0, gio-2.0, gobject-2.0])
 PKG_CHECK_MODULES(CAIRO, [cairo >= 1.2])
@@ -119,8 +136,8 @@ gl_VISIBILITY
 
 # CLOEXEC
 AC_MSG_CHECKING([fopen() close-on-exec flag])
-AS_CASE([$host],
-  [*-*-mingw32], [
+AS_CASE([$host_os],
+  [mingw32], [
     # Assume that if we're building for Windows, we want to pass N to fopen().
     AC_MSG_RESULT([N])
     AC_DEFINE([FOPEN_CLOEXEC_FLAG], ["N"], [Set to the fopen() flag string that sets FD_CLOEXEC, or an empty string if not supported.])
@@ -163,18 +180,32 @@ AS_CASE([$host],
 # Fallback: racily use fcntl()
 AC_CHECK_FUNCS([fcntl])
 
+# The test driver has special support for testing Windows builds from Cygwin
+AC_MSG_CHECKING([whether to cross-test from Cygwin])
+if test "$host_os" = "mingw32" -a "$build_os" = "cygwin"; then
+  AC_MSG_RESULT([yes])
+  CYGWIN_CROSS_TEST=yes
+else
+  AC_MSG_RESULT([no])
+  CYGWIN_CROSS_TEST=""
+fi
+AC_SUBST([CYGWIN_CROSS_TEST])
+AM_CONDITIONAL([CYGWIN_CROSS_TEST], [test -n "$CYGWIN_CROSS_TEST"])
+
 # Only enable this on MinGW, since otherwise gcc will complain about an
 # unknown option whenever it produces any *other* warnings
-AS_CASE([$host],
-  [*-*-mingw32],   [CFLAG_MS_FORMAT=-Wno-pedantic-ms-format],
-  [CFLAG_MS_FORMAT=""]
-)
+if test "$host_os" = "mingw32"; then
+  CFLAG_MS_FORMAT=-Wno-pedantic-ms-format
+else
+  CFLAG_MS_FORMAT=""
+fi
 AC_SUBST([CFLAG_MS_FORMAT])
 
 # The min/max glib version is actually 2.16, but glib doesn't have special
 # handling for API changes that old
 AC_SUBST(AM_CFLAGS, ['-Wall -Wextra -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Wnested-externs $(CFLAG_MS_FORMAT) $(CFLAG_VISIBILITY) -DG_DISABLE_SINGLE_INCLUDES -DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_26 -DGLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_MIN_REQUIRED -fno-common'])
 
+AC_SUBST(FEATURE_FLAGS)
 
 AC_CONFIG_FILES([
 Makefile

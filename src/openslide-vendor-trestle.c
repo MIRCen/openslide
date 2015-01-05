@@ -181,7 +181,7 @@ static bool trestle_detect(const char *filename G_GNUC_UNUSED,
   if (!software) {
     return false;
   }
-  if (strncmp(TRESTLE_SOFTWARE, software, strlen(TRESTLE_SOFTWARE))) {
+  if (!g_str_has_prefix(software, TRESTLE_SOFTWARE)) {
     g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                 "Not a Trestle slide");
     return false;
@@ -197,7 +197,7 @@ static bool trestle_detect(const char *filename G_GNUC_UNUSED,
   for (int64_t i = 0; i < dirs; i++) {
     if (!_openslide_tifflike_is_tiled(tl, i)) {
       g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                  "TIFF level %"G_GINT64_FORMAT" is not tiled", i);
+                  "TIFF level %"PRId64" is not tiled", i);
       return false;
     }
   }

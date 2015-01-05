@@ -24,7 +24,6 @@
 #include "openslide-private.h"
 
 #include <stdio.h>
-#include <stdint.h>
 #include <string.h>
 #include <math.h>
 #include <errno.h>
@@ -104,6 +103,12 @@ bool _openslide_read_key_file(GKeyFile *key_file, const char *filename,
   int64_t size = ftello(f);
   if (size == -1) {
     _openslide_io_error(err, "Couldn't get size of %s", filename);
+    goto FAIL;
+  }
+  if (size == 0) {
+    // glib < 2.32 logs a critical error when parsing a zero-length key file
+    g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                "Key file %s is empty", filename);
     goto FAIL;
   }
   if (size > max_size) {
@@ -196,6 +201,7 @@ double _openslide_parse_double(const char *value) {
   g_strdelimit(canonical, ",", '.');
 
   char *endptr;
+  errno = 0;
   double result = g_ascii_strtod(canonical, &endptr);
   // fail on overflow/underflow
   if (canonical[0] == 0 || endptr[0] != 0 || errno == ERANGE) {
@@ -226,7 +232,7 @@ void _openslide_duplicate_int_prop(openslide_t *osr, const char *src,
     if (endptr[0] == 0) {
       g_hash_table_insert(osr->properties,
                           g_strdup(dest),
-                          g_strdup_printf("%"G_GINT64_FORMAT, result));
+                          g_strdup_printf("%"PRId64, result));
     }
   }
 }
@@ -266,19 +272,19 @@ void _openslide_set_bounds_props_from_grid(openslide_t *osr,
 
   g_hash_table_insert(osr->properties,
                       g_strdup(OPENSLIDE_PROPERTY_NAME_BOUNDS_X),
-                      g_strdup_printf("%"G_GINT64_FORMAT,
+                      g_strdup_printf("%"PRId64,
                                       (int64_t) floor(x)));
   g_hash_table_insert(osr->properties,
                       g_strdup(OPENSLIDE_PROPERTY_NAME_BOUNDS_Y),
-                      g_strdup_printf("%"G_GINT64_FORMAT,
+                      g_strdup_printf("%"PRId64,
                                       (int64_t) floor(y)));
   g_hash_table_insert(osr->properties,
                       g_strdup(OPENSLIDE_PROPERTY_NAME_BOUNDS_WIDTH),
-                      g_strdup_printf("%"G_GINT64_FORMAT,
+                      g_strdup_printf("%"PRId64,
                                       (int64_t) (ceil(x + w) - floor(x))));
   g_hash_table_insert(osr->properties,
                       g_strdup(OPENSLIDE_PROPERTY_NAME_BOUNDS_HEIGHT),
-                      g_strdup_printf("%"G_GINT64_FORMAT,
+                      g_strdup_printf("%"PRId64,
                                       (int64_t) (ceil(y + h) - floor(y))));
 }
 

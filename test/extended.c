@@ -22,8 +22,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
-#include <stdint.h>
 #include <stdbool.h>
+#include <inttypes.h>
 
 #ifndef WIN32
 #include <sys/types.h>
@@ -32,6 +32,7 @@
 
 #include <glib.h>
 #include <openslide.h>
+#include "test-common.h"
 
 static void fail(const char *str, ...) {
   va_list ap;
@@ -54,8 +55,8 @@ static void test_image_fetch(openslide_t *osr,
 
   const char *err = openslide_get_error(osr);
   if (err) {
-    fail("Read failed: %"G_GINT64_FORMAT" %"G_GINT64_FORMAT
-         " %"G_GINT64_FORMAT" %"G_GINT64_FORMAT": %s", x, y, w, h, err);
+    fail("Read failed: %"PRId64" %"PRId64" %"PRId64" %"PRId64": %s",
+         x, y, w, h, err);
   }
 }
 
@@ -95,12 +96,10 @@ static gpointer cloexec_thread(const gpointer prog) {
 
 static void child_check_open_fds(void) {
   for (int i = 3; i < 128; i++) {
-    gchar *proc = g_strdup_printf("/proc/%d/fd/%d", getpid(), i);
-    gchar *link = g_file_read_link(proc, NULL);
-    g_free(proc);
-    if (link != NULL) {
-      printf("%s\n", link);
-      g_free(link);
+    gchar *path = get_fd_path(i);
+    if (path != NULL) {
+      printf("%s\n", path);
+      g_free(path);
     }
   }
 }

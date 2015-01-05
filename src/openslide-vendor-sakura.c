@@ -39,6 +39,7 @@
 #include <glib-object.h>
 #include <gio/gio.h>
 #include <string.h>
+#include <errno.h>
 
 static const char MAGIC_BYTES[] = "SVGigaPixelImage";
 
@@ -59,10 +60,11 @@ static const struct property {
   {"SVHRScanDataXPO", "FocussingMethod", SQLITE_TEXT},
 };
 
-enum color_indexes {
+enum color_index {
   INDEX_RED = 0,
   INDEX_GREEN = 1,
   INDEX_BLUE = 2,
+  NUM_INDEXES = 3,
 };
 
 #define PREPARE_OR_FAIL(DEST, DB, SQL) do {				\
@@ -96,21 +98,10 @@ struct level {
   struct _openslide_grid *grid;
 };
 
-struct tile {
-  char *id_red;
-  char *id_green;
-  char *id_blue;
-};
-
 struct associated_image {
   struct _openslide_associated_image base;
   char *filename;
   char *data_sql;
-};
-
-struct ensure_components_args {
-  GError *err;
-  double downsample;
 };
 
 static char *get_quoted_unique_table_name(sqlite3 *db, GError **err) {
@@ -183,13 +174,6 @@ FAIL:
   return result;
 }
 
-static void tile_free(struct tile *tile) {
-  g_free(tile->id_red);
-  g_free(tile->id_green);
-  g_free(tile->id_blue);
-  g_slice_free(struct tile, tile);
-}
-
 static void destroy_level(struct level *l) {
   _openslide_grid_destroy(l->grid);
   g_slice_free(struct level, l);
@@ -207,28 +191,129 @@ static void destroy(openslide_t *osr) {
   g_free(osr->levels);
 }
 
+static char *make_tileid(int64_t x, int64_t y,
+                         int64_t downsample,
+                         enum color_index color) {
+  // T;x|y;downsample;color;0
+  return g_strdup_printf("T;%"PRId64"|%"PRId64";%"PRId64";%d;0",
+                         x, y, downsample, color);
+}
+
+static bool _parse_tileid_column(const char *tileid, const char *col,
+                                 int64_t *result,
+                                 GError **err) {
+  char *endptr;
+  errno = 0;
+  int64_t val = g_ascii_strtoll(col, &endptr, 10);
+  if (*col == 0 || *endptr != 0 || errno == ERANGE || val < 0) {
+    g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                "Bad field value in tile ID %s", tileid);
+    return false;
+  }
+  *result = val;
+  return true;
+}
+
+static bool parse_tileid(const char *tileid,
+                         int64_t *_x, int64_t *_y,
+                         int64_t *_downsample,
+                         enum color_index *_color,
+                         GError **err) {
+  // T;x|y;downsample;color;0
+  gchar **fields = NULL;
+  gchar *synth_tileid = NULL;
+  bool success = false;
+
+  // preliminary checks
+  if (!g_str_has_prefix(tileid, "T;") || // not a tile
+      g_str_has_suffix(tileid, "#")) {   // hash of a tile
+    g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_NO_VALUE,
+                "Not a tile ID");
+    goto OUT;
+  }
+
+  // parse and check fields
+  fields = g_strsplit_set(tileid, ";|", 0);
+  if (g_strv_length(fields) != 6) {
+    g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                "Bad field count in tile ID %s", tileid);
+    goto OUT;
+  }
+  int64_t x, y, downsample, color, last_value;
+  if (!_parse_tileid_column(tileid, fields[1], &x, err) ||
+      !_parse_tileid_column(tileid, fields[2], &y, err) ||
+      !_parse_tileid_column(tileid, fields[3], &downsample, err) ||
+      !_parse_tileid_column(tileid, fields[4], &color, err) ||
+      !_parse_tileid_column(tileid, fields[5], &last_value, err)) {
+    goto OUT;
+  }
+  if (downsample < 1 || color >= NUM_INDEXES || last_value != 0) {
+    g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                "Bad field value in tile ID %s", tileid);
+    goto OUT;
+  }
+
+  // verify round trip (no leading zeros, etc.)
+  synth_tileid = make_tileid(x, y, downsample, color);
+  if (strcmp(tileid, synth_tileid)) {
+    g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                "Couldn't round-trip tile ID %s", tileid);
+    goto OUT;
+  }
+
+  // commit
+  if (_x) {
+    *_x = x;
+  }
+  if (_y) {
+    *_y = y;
+  }
+  if (_downsample) {
+    *_downsample = downsample;
+  }
+  if (_color) {
+    *_color = color;
+  }
+  success = true;
+
+OUT:
+  g_strfreev(fields);
+  g_free(synth_tileid);
+  return success;
+}
+
 static bool read_channel(uint8_t *channeldata,
-                         const char *tileid,
+                         int64_t tile_col, int64_t tile_row,
+                         int64_t downsample,
+                         enum color_index color,
                          int32_t tile_size,
                          sqlite3_stmt *stmt,
                          GError **err) {
+  // compute tile id
+  char *tileid = make_tileid(tile_col * tile_size * downsample,
+                             tile_row * tile_size * downsample,
+                             downsample, color);
+
   // retrieve compressed tile
   sqlite3_reset(stmt);
   BIND_TEXT_OR_FAIL(stmt, 1, tileid);
   STEP_OR_FAIL(stmt);
   const void *buf = sqlite3_column_blob(stmt, 0);
   int buflen = sqlite3_column_bytes(stmt, 0);
+  g_free(tileid);
 
   // decompress
   return _openslide_jpeg_decode_buffer_gray(buf, buflen, channeldata,
                                             tile_size, tile_size, err);
 
 FAIL:
+  g_free(tileid);
   return false;
 }
 
 static bool read_image(uint32_t *tiledata,
-                       const struct tile *tile,
+                       int64_t tile_col, int64_t tile_row,
+                       int64_t downsample,
                        int32_t tile_size,
                        sqlite3_stmt *stmt,
                        GError **err) {
@@ -237,13 +322,16 @@ static bool read_image(uint32_t *tiledata,
   uint8_t *blue_channel = g_slice_alloc(tile_size * tile_size);
   bool success = false;
 
-  if (!read_channel(red_channel, tile->id_red, tile_size, stmt, err)) {
+  if (!read_channel(red_channel, tile_col, tile_row, downsample,
+                    INDEX_RED, tile_size, stmt, err)) {
     goto OUT;
   }
-  if (!read_channel(green_channel, tile->id_green, tile_size, stmt, err)) {
+  if (!read_channel(green_channel, tile_col, tile_row, downsample,
+                    INDEX_GREEN, tile_size, stmt, err)) {
     goto OUT;
   }
-  if (!read_channel(blue_channel, tile->id_blue, tile_size, stmt, err)) {
+  if (!read_channel(blue_channel, tile_col, tile_row, downsample,
+                    INDEX_BLUE, tile_size, stmt, err)) {
     goto OUT;
   }
 
@@ -267,13 +355,13 @@ static bool read_tile(openslide_t *osr,
                       cairo_t *cr,
                       struct _openslide_level *level,
                       int64_t tile_col, int64_t tile_row,
-                      void *_tile, void *arg,
+                      void *arg,
                       GError **err) {
   struct sakura_ops_data *data = osr->data;
   struct level *l = (struct level *) level;
-  struct tile *tile = _tile;
   sqlite3_stmt *stmt = arg;
   int32_t tile_size = data->tile_size;
+  GError *tmp_err = NULL;
 
   // cache
   struct _openslide_cache_entry *cache_entry;
@@ -284,9 +372,18 @@ static bool read_tile(openslide_t *osr,
     tiledata = g_slice_alloc(tile_size * tile_size * 4);
 
     // read tile
-    if (!read_image(tiledata, tile, tile_size, stmt, err)) {
-      g_slice_free1(tile_size * tile_size * 4, tiledata);
-      return false;
+    if (!read_image(tiledata, tile_col, tile_row, l->base.downsample,
+                    tile_size, stmt, &tmp_err)) {
+      if (g_error_matches(tmp_err, OPENSLIDE_ERROR,
+                          OPENSLIDE_ERROR_NO_VALUE)) {
+        // no such tile
+        g_clear_error(&tmp_err);
+        return true;
+      } else {
+        g_propagate_error(err, tmp_err);
+        g_slice_free1(tile_size * tile_size * 4, tiledata);
+        return false;
+      }
     }
 
     // clip, if necessary
@@ -454,23 +551,6 @@ static gint compare_downsamples(const void *a, const void *b) {
     return 1;
   } else {
     return 0;
-  }
-}
-
-static void ensure_components(struct _openslide_grid *grid G_GNUC_UNUSED,
-                              int64_t tile_col, int64_t tile_row,
-                              void *_tile, void *arg) {
-  struct tile *tile = _tile;
-  struct ensure_components_args *args = arg;
-
-  if (args->err) {
-    return;
-  }
-  if (!tile->id_red || !tile->id_green || !tile->id_blue) {
-    g_set_error(&args->err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                "Missing color component: downsample %g, tile "
-                "(%"G_GINT64_FORMAT", %"G_GINT64_FORMAT")",
-                args->downsample, tile_col, tile_row);
   }
 }
 
@@ -655,33 +735,20 @@ FAIL:
   return success;
 }
 
-static void gather_tileids(struct _openslide_grid *grid G_GNUC_UNUSED,
-                           int64_t tile_col G_GNUC_UNUSED,
-                           int64_t tile_row G_GNUC_UNUSED,
-                           void *_tile, void *arg) {
-  struct tile *tile = _tile;
-  GList **list = arg;
-
-  *list = g_list_prepend(*list, tile->id_red);
-  *list = g_list_prepend(*list, tile->id_green);
-  *list = g_list_prepend(*list, tile->id_blue);
-}
-
-static gint compare_tileids(const void *a, const void *b) {
+static gint compare_tileids(const void *a, const void *b,
+                            void *data G_GNUC_UNUSED) {
   return strcmp(a, b);
 }
 
 static bool hash_tiles(struct _openslide_hash *quickhash1,
                        sqlite3 *db,
-                       struct level *l,
                        const char *unique_table_name,
+                       GQueue *tileids,
                        GError **err) {
   bool success = false;
 
-  // collect tile IDs
-  GList *tileids = NULL;
-  _openslide_grid_tilemap_foreach(l->grid, gather_tileids, &tileids);
-  tileids = g_list_sort(tileids, compare_tileids);
+  // sort tile IDs
+  g_queue_sort(tileids, compare_tileids, NULL);
 
   // prepare query
   char *sql = g_strdup_printf("SELECT data from %s WHERE id = ?",
@@ -690,7 +757,7 @@ static bool hash_tiles(struct _openslide_hash *quickhash1,
   PREPARE_OR_FAIL(stmt, db, sql);
 
   // hash tiles
-  for (GList *cur = tileids; cur; cur = cur->next) {
+  for (GList *cur = tileids->head; cur; cur = cur->next) {
     sqlite3_reset(stmt);
     BIND_TEXT_OR_FAIL(stmt, 1, cur->data);
     STEP_OR_FAIL(stmt);
@@ -706,14 +773,13 @@ static bool hash_tiles(struct _openslide_hash *quickhash1,
 FAIL:
   sqlite3_finalize(stmt);
   g_free(sql);
-  g_list_free(tileids);
   return success;
 }
 
 static void compute_quickhash1(struct _openslide_hash *quickhash1,
                                sqlite3 *db,
-                               struct level *l,
-                               const char *unique_table_name) {
+                               const char *unique_table_name,
+                               GQueue *tileids) {
   if (!hash_columns(quickhash1, db, "SELECT SlideId, Date, Creator, "
                     "Description, Keywords FROM SVSlideDataXPO "
                     "ORDER BY OID", NULL)) {
@@ -734,7 +800,7 @@ static void compute_quickhash1(struct _openslide_hash *quickhash1,
   }
 
   // tiles in lowest-resolution level
-  if (!hash_tiles(quickhash1, db, l, unique_table_name, NULL)) {
+  if (!hash_tiles(quickhash1, db, unique_table_name, tileids, NULL)) {
     goto FAIL;
   }
 
@@ -744,17 +810,28 @@ FAIL:
   _openslide_hash_disable(quickhash1);
 }
 
+static void clear_tileids(GQueue *tileids) {
+  char *str;
+  while ((str = g_queue_pop_head(tileids))) {
+    g_free(str);
+  }
+}
+
 static bool sakura_open(openslide_t *osr, const char *filename,
                         struct _openslide_tifflike *tl G_GNUC_UNUSED,
                         struct _openslide_hash *quickhash1, GError **err) {
   struct level **levels = NULL;
   int32_t level_count = 0;
   char *unique_table_name = NULL;
+  char *sql = NULL;
   sqlite3_stmt *stmt = NULL;
   GHashTable *level_hash =
     g_hash_table_new_full(g_int64_hash, g_int64_equal, g_free,
                           (GDestroyNotify) destroy_level);
+  GQueue *quickhash_tileids = g_queue_new();
+  int64_t quickhash_downsample = 0;
   bool success = false;
+  GError *tmp_err = NULL;
 
   // open database
   sqlite3 *db = _openslide_sqlite_open(filename, err);
@@ -769,33 +846,42 @@ static bool sakura_open(openslide_t *osr, const char *filename,
   }
 
   // read header
-  int64_t image_width, image_height;
-  int32_t tile_size = 0;  // avoid spurious warning
+  // initialize to avoid spurious warnings
+  int64_t image_width = 0;
+  int64_t image_height = 0;
+  int32_t tile_size = 0;
   if (!read_header(db, unique_table_name,
                    &image_width, &image_height,
                    &tile_size, err)) {
     goto FAIL;
   }
 
-  // create levels
-  // copy tile table into tilemap grid, since the table has no useful indexes
-  PREPARE_OR_FAIL(stmt, db, "SELECT PYRAMIDLEVEL, COLUMNINDEX, ROWINDEX, "
-                  "COLORINDEX, TILEID FROM tile");
+  // create levels; gather tileids for top level
+  sql = g_strdup_printf("SELECT id FROM %s", unique_table_name);
+  PREPARE_OR_FAIL(stmt, db, sql);
   int ret;
   while ((ret = sqlite3_step(stmt)) == SQLITE_ROW) {
-    int64_t downsample = sqlite3_column_int64(stmt, 0);
-    int64_t x = sqlite3_column_int64(stmt, 1);
-    int64_t y = sqlite3_column_int64(stmt, 2);
-    int color = sqlite3_column_int(stmt, 3);
-    const char *tileid = (const char *) sqlite3_column_text(stmt, 4);
+    const char *tileid = (const char *) sqlite3_column_text(stmt, 0);
+    int64_t downsample;
+    if (!parse_tileid(tileid, NULL, NULL, &downsample, NULL, &tmp_err)) {
+      if (g_error_matches(tmp_err, OPENSLIDE_ERROR,
+                          OPENSLIDE_ERROR_NO_VALUE)) {
+        // not a tile
+        g_clear_error(&tmp_err);
+        continue;
+      } else {
+        g_propagate_error(err, tmp_err);
+        goto FAIL;
+      }
+    }
 
-    // get or create level
+    // create level if new
     struct level *l = g_hash_table_lookup(level_hash, &downsample);
     if (!l) {
       // ensure downsample is > 0 and a power of 2
       if (downsample <= 0 || (downsample & (downsample - 1))) {
         g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                    "Invalid downsample %"G_GINT64_FORMAT, downsample);
+                    "Invalid downsample %"PRId64, downsample);
         goto FAIL;
       }
 
@@ -805,50 +891,28 @@ static bool sakura_open(openslide_t *osr, const char *filename,
       l->base.h = image_height / downsample;
       l->base.tile_w = tile_size;
       l->base.tile_h = tile_size;
-      l->grid = _openslide_grid_create_tilemap(osr, tile_size, tile_size,
-                                               read_tile,
-                                               (GDestroyNotify) tile_free);
+      int64_t tiles_across =
+        (l->base.w / tile_size) + !!(l->base.w % tile_size);
+      int64_t tiles_down =
+        (l->base.h / tile_size) + !!(l->base.h % tile_size);
+      l->grid = _openslide_grid_create_simple(osr,
+                                              tiles_across, tiles_down,
+                                              tile_size, tile_size,
+                                              read_tile);
       int64_t *downsample_val = g_new(int64_t, 1);
       *downsample_val = downsample;
       g_hash_table_insert(level_hash, downsample_val, l);
+
+      if (downsample > quickhash_downsample) {
+        clear_tileids(quickhash_tileids);
+        quickhash_downsample = downsample;
+      }
     }
 
-    // get or create tile
-    int64_t col = x / (tile_size * downsample);
-    int64_t row = y / (tile_size * downsample);
-    int64_t tw = MIN(tile_size, l->base.w - col * tile_size);
-    int64_t th = MIN(tile_size, l->base.h - row * tile_size);
-    struct tile *tile = _openslide_grid_tilemap_get_tile(l->grid, col, row);
-    if (!tile) {
-      tile = g_slice_new0(struct tile);
-      _openslide_grid_tilemap_add_tile(l->grid, col, row, 0, 0, tw, th, tile);
+    // save tileid if smallest level
+    if (downsample == quickhash_downsample) {
+      g_queue_push_tail(quickhash_tileids, g_strdup(tileid));
     }
-
-    // store tileid
-    char **id_field;
-    switch (color) {
-    case INDEX_RED:
-      id_field = &tile->id_red;
-      break;
-    case INDEX_GREEN:
-      id_field = &tile->id_green;
-      break;
-    case INDEX_BLUE:
-      id_field = &tile->id_blue;
-      break;
-    default:
-      g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                  "Unknown tile color: %d", color);
-      goto FAIL;
-    }
-    if (*id_field) {
-      g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                  "Collision in tile table: %"G_GINT64_FORMAT
-                  "/%"G_GINT64_FORMAT"/%"G_GINT64_FORMAT"/%d",
-                  downsample, x, y, color);
-      goto FAIL;
-    }
-    *id_field = g_strdup(tileid);
   }
   if (ret != SQLITE_DONE) {
     _openslide_sqlite_propagate_error(db, err);
@@ -856,6 +920,8 @@ static bool sakura_open(openslide_t *osr, const char *filename,
   }
   sqlite3_finalize(stmt);
   stmt = NULL;
+  g_free(sql);
+  sql = NULL;
 
   // move levels to level array
   level_count = g_hash_table_size(level_hash);
@@ -877,19 +943,6 @@ static bool sakura_open(openslide_t *osr, const char *filename,
   }
   g_list_free(keys);
 
-  // ensure all tiles have all components
-  for (i = 0; i < level_count; i++) {
-    struct level *l = levels[i];
-    struct ensure_components_args args = {
-      .downsample = l->base.downsample,
-    };
-    _openslide_grid_tilemap_foreach(l->grid, ensure_components, &args);
-    if (args.err) {
-      g_propagate_error(err, args.err);
-      goto FAIL;
-    }
-  }
-
   // add properties
   add_properties(osr, db, unique_table_name);
 
@@ -909,8 +962,7 @@ static bool sakura_open(openslide_t *osr, const char *filename,
                        "SVSlideDataXPO.OID", NULL);
 
   // compute quickhash
-  compute_quickhash1(quickhash1, db,
-                     levels[level_count - 1], unique_table_name);
+  compute_quickhash1(quickhash1, db, unique_table_name, quickhash_tileids);
 
   // build ops data
   struct sakura_ops_data *data = g_slice_new0(struct sakura_ops_data);
@@ -939,7 +991,10 @@ FAIL:
 
   sqlite3_finalize(stmt);
   _openslide_sqlite_close(db);
+  clear_tileids(quickhash_tileids);
+  g_queue_free(quickhash_tileids);
   g_hash_table_destroy(level_hash);
+  g_free(sql);
   g_free(unique_table_name);
   return success;
 }

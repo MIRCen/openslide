@@ -2,7 +2,7 @@
 #
 # OpenSlide, a library for reading whole slide image files
 #
-# Copyright (c) 2012-2013 Carnegie Mellon University
+# Copyright (c) 2012-2014 Carnegie Mellon University
 # All rights reserved.
 #
 # OpenSlide is free software: you can redistribute it and/or modify
@@ -19,6 +19,8 @@
 # <http://www.gnu.org/licenses/>.
 #
 
+from ConfigParser import RawConfigParser
+from contextlib import closing
 import filecmp
 import fnmatch
 from hashlib import sha256
@@ -28,11 +30,13 @@ import re
 import requests
 import shlex
 from shutil import copytree, rmtree
+import struct
 import subprocess
 import sys
 import tarfile
 from tempfile import mkdtemp, TemporaryFile
 import textwrap
+from time import time as curtime
 from urlparse import urljoin
 import yaml
 from zipfile import ZipFile
@@ -41,9 +45,16 @@ TESTDATA_URL = 'http://openslide.cs.cmu.edu/download/openslide-testdata/'
 VALGRIND_SUPPRESSIONS = '!!SRCDIR!!/valgrind.supp'
 CASEROOT = '!!SRCDIR!!/cases'
 SLIDELIST = '!!SRCDIR!!/cases/slides.yaml'
+MOSAICLIST = '!!SRCDIR!!/cases/mosaic.ini'
 WORKROOT = '!!BUILDDIR!!/_slidedata'
 PRISTINE = '!!BUILDDIR!!/_slidedata/_pristine'
+FEATURES = set('!!FEATURES!!'.split())
 TESTCONF = 'config.yaml'
+
+GREEN = '\033[1;32m'
+BLUE = '\033[1;34m'
+RED = '\033[1;31m'
+RESET = '\033[1;0m'
 
 _commands = []
 _command_funcs = {}
@@ -51,11 +62,45 @@ _command_funcs = {}
 SKIP = object()
 
 
+if '!!CYGWIN_CROSS_TEST!!':
+    import ctypes
+
+    _cygwin = ctypes.CDLL('cygwin1', use_errno=True)
+    _cygwin_conv_path = _cygwin.cygwin_conv_path
+    _cygwin_conv_path.argtypes = [ctypes.c_uint, ctypes.c_void_p,
+            ctypes.c_void_p, ctypes.c_size_t]
+    _cygwin_conv_path.restype = ctypes.c_ssize_t
+
+    def native_path(path):
+        flags = 0x100  # CCP_POSIX_TO_WIN_A | CCP_RELATIVE
+        size = _cygwin_conv_path(flags, path, None, 0)
+        if size == -1:
+            raise OSError(ctypes.get_errno(), "Couldn't convert path")
+        buf = ctypes.create_string_buffer(size)
+        if _cygwin_conv_path(flags, path, buf, size) == -1:
+            raise OSError(ctypes.get_errno(), "Couldn't convert path")
+        return buf.value
+
+    def symlink(src, dst):
+        if not os.path.isabs(src):
+            src = os.path.abspath(os.path.join(os.path.dirname(dst), src))
+        subprocess.check_call(['!!BUILDDIR!!/symlink', native_path(src),
+                native_path(dst)])
+else:
+    native_path = lambda p: p
+    symlink = os.symlink
+
+
 def _command(f):
     '''Decorator to mark the function as a user command.'''
     _commands.append(f.func_name)
     _command_funcs[f.func_name] = f
     return f
+
+
+def _color(color, str):
+    '''Return str, wrapped in the specified ANSI color escape sequence.'''
+    return color + str + RESET
 
 
 def _list_tests(pattern='*'):
@@ -86,6 +131,35 @@ def _load_test_config(testname):
         return yaml.safe_load(fh)
 
 
+def _features_available(conf):
+    '''Return True if the features required by the test configuration
+    are available in this build.'''
+    for feature in conf.get('requires', []):
+        if feature not in FEATURES:
+            return False
+    return True
+
+
+def _is_bigtiff(path):
+    '''Return True if the specified file is a BigTIFF.'''
+    try:
+        with open(path, 'rb') as fh:
+            # Check endianness
+            sig = fh.read(2)
+            if sig == 'II':
+                fmt = '<'
+            elif sig == 'MM':
+                fmt = '>'
+            else:
+                return False
+            # Check magic number
+            fmt += 'H'
+            magic = struct.unpack(fmt, fh.read(struct.calcsize(fmt)))[0]
+            return magic == 43
+    except IOError:
+        return False
+
+
 def _launch_test(test, slidefile, valgrind=False, testdir=None, debug=[],
         args=[], **kwargs):
     '''Start the specified test from the testdir directory against the
@@ -99,17 +173,21 @@ def _launch_test(test, slidefile, valgrind=False, testdir=None, debug=[],
     env.update(
         G_DEBUG='gc-friendly',
         G_MESSAGES_DEBUG='',
-        G_SLICE='always-malloc,debug-blocks',
+        G_SLICE='always-malloc',
         MALLOC_CHECK_='1',
         OPENSLIDE_DEBUG=','.join(debug),
         GIO_USE_VFS='local',
     )
-    args = [os.path.join(testdir, test), slidefile] + args
+    args = [os.path.join(testdir, test), native_path(slidefile)] + args
     if valgrind:
         args = [os.path.join(testdir, '../libtool'), '--mode=execute',
                 'valgrind', '--quiet', '--error-exitcode=3',
                 '--suppressions=' + VALGRIND_SUPPRESSIONS,
                 '--leak-check=full', '--num-callers=30'] + args
+    else:
+        # debug-blocks retains pointers to freed slices, so don't use it
+        # with Valgrind
+        env['G_SLICE'] += ',debug-blocks'
     return subprocess.Popen(args, env=env, **kwargs)
 
 
@@ -134,8 +212,10 @@ def _try_open_slide(slidefile, valgrind=False, testdir=None, debug=[],
             testdir=testdir, debug=debug, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE)
     out, err = proc.communicate()
-    if proc.returncode or out or err:
+    if out or err or proc.returncode > 0:
         return (out + err).strip()
+    elif proc.returncode:
+        return 'Exited with status %d' % proc.returncode
     else:
         return None
 
@@ -174,6 +254,7 @@ def _fetch_one(slide):
     r.raise_for_status()
 
     cur = 0
+    last_update = 0
     size = int(r.headers['Content-Length'])
     filename = os.path.basename(slide)
     is_zip = os.path.splitext(filename)[1] == '.zip'
@@ -185,19 +266,25 @@ def _fetch_one(slide):
         else:
             dest = open(os.path.join(destpath, filename), 'wb')
         hash = sha256()
-        for chunk in r.iter_content(1 << 20):
+        for chunk in r.iter_content(128 << 10):
             dest.write(chunk)
             hash.update(chunk)
+
             cur += len(chunk)
-            print 'Fetching %s (%d/%d MB)...\r' % (slide, cur >> 20, size >> 20),
-            sys.stdout.flush()
-        print
+            now = curtime()
+            if now - last_update >= 1:
+                print 'Fetching %s (%d/%d MB)...\r' % (slide, cur >> 20,
+                        size >> 20),
+                sys.stdout.flush()
+                last_update = now
+        print '%-79s' % ('Fetched %s (%d MB)' % (slide, size >> 20))
+
         if hash.hexdigest() != slides[slide]:
             raise ValueError('Hash mismatch: %s' % slide)
 
         if is_zip:
             print 'Unpacking %s...' % slide
-            with ZipFile(dest) as zf:
+            with closing(ZipFile(dest)) as zf:
                 zf.extractall(path=destpath)
 
         dest.close()
@@ -222,14 +309,16 @@ def create(testname, slide):
     print 'Creating test %s for %s' % (testname, slide)
 
     for relpath in _list_slide_files(slide):
-        if _try_open_slide(os.path.join(srcpath, relpath)) is None:
+        curpath = os.path.join(srcpath, relpath)
+        if _try_open_slide(curpath) is None:
             slidefile = relpath
+            slidepath = curpath
             break
     else:
         raise IOError('Could not locate readable slide file')
 
-    query = _launch_test('query', os.path.join(srcpath, slidefile),
-            args=['-n'], stdout=subprocess.PIPE)
+    query = _launch_test('query', slidepath, args=['-n'],
+            stdout=subprocess.PIPE)
     vendor, _ = query.communicate()
     if query.returncode:
         raise IOError('Could not query slide vendor')
@@ -244,6 +333,8 @@ def create(testname, slide):
         'slide': slidefile,
         'vendor': vendor,
     }
+    if _is_bigtiff(slidepath):
+        conf['requires'] = ['libtiff-4']
     with open(os.path.join(testpath, TESTCONF), 'w') as fh:
         yaml.safe_dump(conf, fh, default_flow_style=False)
 
@@ -289,6 +380,39 @@ def pack(testname):
         print 'Delta: %d bytes' % total_size
 
 
+def _run_generator(command_str, inpath, outpath):
+    '''Run the specified generator pipeline.'''
+
+    cmds = command_str.split('|')
+    procs = []
+    fin = []
+    fout = []
+    try:
+        fin.append(None)
+        for _ in range(len(cmds) - 1):
+            pipe_r, pipe_w = os.pipe()
+            fout.append(pipe_w)
+            fin.append(pipe_r)
+        fout.append(None)
+
+        for i, cmd in enumerate(cmds):
+            proc = subprocess.Popen([a % {'in': inpath, 'out': outpath}
+                    for a in shlex.split(cmd)],
+                    stdin=fin[i], stdout=fout[i], close_fds=True)
+            procs.append(proc)
+    finally:
+        for fh in fout + fin:
+            if fh is not None:
+                os.close(fh)
+
+    returncode = 0
+    for proc in procs:
+        proc.wait()
+        returncode = returncode or proc.returncode
+    if returncode:
+        raise IOError('Generator returned exit status %d' % returncode)
+
+
 def _unpack_one(testname):
     '''Unpack the specified test.'''
 
@@ -317,14 +441,20 @@ def _unpack_one(testname):
 
             generator = generators.get(os.path.basename(relpath))
             if generator:
-                subprocess.check_call([a % {'in': origpath, 'out': newpath}
-                        for a in shlex.split(generator)])
+                _run_generator(generator, origpath, newpath)
             elif os.path.exists(deltapath):
                 subprocess.check_call(['xdelta3', 'decode', '-s',
                         origpath, deltapath, newpath])
             else:
                 src = os.path.relpath(origpath, os.path.dirname(newpath))
-                os.symlink(src, newpath)
+                symlink(src, newpath)
+
+
+@_command
+def unpack(pattern='*'):
+    '''Unpack all tests matching the specified pattern.'''
+    for testname in _list_tests(pattern):
+        _unpack_one(testname)
 
 
 def _run_one(testname, valgrind=False, testdir=None):
@@ -333,6 +463,9 @@ def _run_one(testname, valgrind=False, testdir=None):
     to succeed, and 3) do in fact succeed.'''
 
     conf = _load_test_config(testname)
+    if not _features_available(conf):
+        print _color(BLUE, '%s: skipped' % testname)
+        return True
     slidefile = os.path.join(WORKROOT, testname, conf['slide'])
     result = _try_open_slide(slidefile, valgrind, testdir,
             vendor=conf.get('vendor', None),
@@ -341,20 +474,21 @@ def _run_one(testname, valgrind=False, testdir=None):
             debug=conf.get('debug', []))
 
     if result is None and not conf['success']:
-        print '%s: unexpected success' % testname
+        print _color(RED, '%s: unexpected success' % testname)
         return False
     elif result is not None and conf['success']:
-        print '%s: unexpected failure: %s' % (testname, result)
+        print _color(RED, '%s: unexpected failure: %s' % (testname, result))
         return False
     elif result is not None and not re.search(conf['error'], result):
-        print '%s: incorrect error: %s' % (testname, result)
+        print _color(RED, '%s: incorrect error: %s' % (testname, result))
         return False
     elif conf.get('primary', False) and conf['success']:
         result = _try_extended(slidefile, valgrind, testdir)
         if result:
-            print '%s: extended test failed: %s' % (testname, result)
+            print _color(RED, '%s: extended test failed: %s' % (testname,
+                    result))
             return False
-    print '%s: OK' % testname
+    print _color(GREEN, '%s: OK' % testname)
     return True
 
 
@@ -374,14 +508,14 @@ def _run_all(pattern='*', valgrind=False, testdir=None):
 
 @_command
 def run(pattern='*'):
-    '''Run all tests matching the specified pattern.'''
+    '''Unpack and run all tests matching the specified pattern.'''
     if _run_all(pattern):
         sys.exit(1)
 
 
 @_command
 def coverage(outfile):
-    '''Run all tests and write coverage report to outfile.'''
+    '''Unpack and run all tests and write coverage report to outfile.'''
     # We have to rebuild the source in order to do profiling.  To minimize
     # collateral damage, we unpack the dist tarball into a temp directory and
     # build there.
@@ -411,15 +545,19 @@ def coverage(outfile):
     _run_all(testdir='test')
 
     # Generate coverage reports
-    paths = []
     for dirpath, dirnames, filenames in os.walk('src'):
-        paths.extend(os.path.join(dirpath, name)
-                for name in fnmatch.filter(sorted(filenames), '*.gcda'))
-    subprocess.check_call(['gcov'] + paths)
+        paths = [os.path.join(dirpath, name)
+                for name in fnmatch.filter(sorted(filenames), '*.gcda')]
+        if paths:
+            subprocess.check_call(['gcov', '-o', dirpath] + paths)
 
     # Record unexecuted lines
-    report = subprocess.check_output(['grep', '-FC', '2', '#####'] +
-            fnmatch.filter(sorted(os.listdir('.')), '*.gcov'))
+    proc = subprocess.Popen(['grep', '-FC', '2', '#####'] +
+            fnmatch.filter(sorted(os.listdir('.')), '*.gcov'),
+            stdout=subprocess.PIPE)
+    report, _ = proc.communicate()
+    if proc.returncode:
+        raise IOError('Process returned exit status %d' % proc.returncode)
     report = '\n'.join(l.replace('.c.gcov', '.c', 1)
             for l in report.split('\n'))
     os.chdir(prevdir)
@@ -432,9 +570,22 @@ def coverage(outfile):
 
 @_command
 def valgrind(pattern='*'):
-    '''Valgrind all tests matching the specified pattern.'''
+    '''Unpack and Valgrind all tests matching the specified pattern.'''
     if _run_all(pattern, valgrind=True):
         sys.exit(1)
+
+
+@_command
+def mosaic(outfile):
+    '''Produce a mosaic image of slide data from various formats.'''
+    cfg = RawConfigParser()
+    cfg.optionxform = str
+    cfg.read(MOSAICLIST)
+    for section in cfg.sections():
+        _fetch_one(cfg.get(section, 'base'))
+    subprocess.check_call([os.path.join('!!BUILDDIR!!', 'mosaic'),
+            native_path(PRISTINE), native_path(MOSAICLIST),
+            native_path(outfile)])
 
 
 @_command
@@ -444,7 +595,8 @@ def time(pattern='*'):
     tests = _list_tests(pattern)
     for testname in tests:
         conf = _load_test_config(testname)
-        if not conf.get('primary', False) or not conf['success']:
+        if (not conf.get('primary', False) or not conf['success']
+                or not _features_available(conf)):
             continue
         _unpack_one(testname)
         slidefile = os.path.join(WORKROOT, testname, conf['slide'])
@@ -452,10 +604,8 @@ def time(pattern='*'):
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         out, err = proc.communicate()
         if proc.returncode or err:
-            print '%s: failed: %s' % (testname, err.strip())
-            sys.exit(1)
-        else:
-            print '%-40s %10s' % (testname, out.strip())
+            out = 'failed'
+        print '%-40s %10s' % (testname, out.strip())
 
 
 @_command

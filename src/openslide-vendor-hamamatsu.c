@@ -66,6 +66,8 @@ static const char KEY_NUM_JPEG_COLS[] = "NoJpegColumns";
 static const char KEY_NUM_JPEG_ROWS[] = "NoJpegRows";
 static const char KEY_OPTIMISATION_FILE[] = "OptimisationFile";
 static const char KEY_MACRO_IMAGE[] = "MacroImage";
+static const char KEY_PHYSICAL_WIDTH[] = "PhysicalWidth";
+static const char KEY_PHYSICAL_HEIGHT[] = "PhysicalHeight";
 static const char KEY_BITS_PER_PIXEL[] = "BitsPerPixel";
 static const char KEY_PIXEL_ORDER[] = "PixelOrder";
 // probing any file under this limit will load the entire file into RAM,
@@ -73,7 +75,7 @@ static const char KEY_PIXEL_ORDER[] = "PixelOrder";
 static const int KEY_FILE_MAX_SIZE = 64 << 10;
 
 // NDPI
-static const char NDPI_SOFTWARE[] = "NDP.scan";
+#define NDPI_FORMAT_FLAG 65420
 #define NDPI_SOURCELENS 65421
 #define NDPI_XOFFSET 65422
 #define NDPI_YOFFSET 65423
@@ -141,6 +143,7 @@ struct hamamatsu_jpeg_ops_data {
   GCond *restart_marker_cond;
   GMutex *restart_marker_cond_mutex;
   uint32_t restart_marker_users;
+  bool restart_marker_thread_throttle;
   bool restart_marker_thread_stop;
   GError *restart_marker_thread_error;
 };
@@ -166,32 +169,9 @@ static GQuark _openslide_hamamatsu_error_quark(void) {
 #define OPENSLIDE_HAMAMATSU_ERROR _openslide_hamamatsu_error_quark()
 
 /*
- * Source manager for doing fancy things with libjpeg and restart markers,
- * initially copied from jdatasrc.c from IJG libjpeg.
+ * Source manager for reading a run of MCUs between two restart markers
+ * as a complete JPEG.  Originally based on jdatasrc.c from IJG libjpeg.
  */
-struct my_src_mgr {
-  struct jpeg_source_mgr pub;   /* public fields */
-
-  JOCTET *buffer;               /* start of buffer */
-  int buffer_size;
-};
-
-static void init_source (j_decompress_ptr cinfo G_GNUC_UNUSED) {
-  /* nothing to be done */
-}
-
-static void skip_input_data (j_decompress_ptr cinfo, long num_bytes) {
-  struct my_src_mgr *src = (struct my_src_mgr *) cinfo->src;
-
-  src->pub.next_input_byte += (size_t) num_bytes;
-  src->pub.bytes_in_buffer -= (size_t) num_bytes;
-}
-
-
-static void term_source (j_decompress_ptr cinfo G_GNUC_UNUSED) {
-  /* nothing to do */
-}
-
 static bool jpeg_random_access_src(j_decompress_ptr cinfo,
                                    FILE *infile,
                                    int64_t header_start_position,
@@ -200,21 +180,6 @@ static bool jpeg_random_access_src(j_decompress_ptr cinfo,
                                    int64_t start_position,
                                    int64_t stop_position,
                                    GError **err) {
-  struct my_src_mgr *src;
-
-  if (cinfo->src == NULL) {     /* first time for this JPEG object? */
-    cinfo->src = (*cinfo->mem->alloc_small) ((j_common_ptr) cinfo,
-                                             JPOOL_PERMANENT,
-                                             sizeof(struct my_src_mgr));
-  }
-
-  src = (struct my_src_mgr *) cinfo->src;
-  src->pub.init_source = init_source;
-  src->pub.fill_input_buffer = NULL;  /* this should never be called */
-  src->pub.skip_input_data = skip_input_data;
-  src->pub.resync_to_restart = jpeg_resync_to_restart; /* use default method */
-  src->pub.term_source = term_source;
-
   // check for problems
   if ((0 > header_start_position) ||
       (header_start_position >= sof_position) ||
@@ -224,17 +189,13 @@ static bool jpeg_random_access_src(j_decompress_ptr cinfo,
         (start_position >= stop_position)))) {
     g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                "Can't do random access JPEG read: "
-	       "header_start_position: %" G_GINT64_FORMAT ", "
-	       "sof_position: %" G_GINT64_FORMAT ", "
-	       "header_stop_position: %" G_GINT64_FORMAT ", "
-	       "start_position: %" G_GINT64_FORMAT ", "
-	       "stop_position: %" G_GINT64_FORMAT,
+	       "header_start_position: %"PRId64", "
+	       "sof_position: %"PRId64", "
+	       "header_stop_position: %"PRId64", "
+	       "start_position: %"PRId64", "
+	       "stop_position: %"PRId64,
 	       header_start_position, sof_position, header_stop_position,
 	       start_position, stop_position);
-
-    src->buffer_size = 0;
-    src->pub.bytes_in_buffer = 0;
-    src->buffer = NULL;
     return false;
   }
 
@@ -245,72 +206,66 @@ static bool jpeg_random_access_src(j_decompress_ptr cinfo,
     data_length = stop_position - start_position;
   }
 
-  src->buffer_size = header_length + data_length;
-  src->pub.bytes_in_buffer = src->buffer_size;
-  src->buffer = g_slice_alloc(src->buffer_size);
-
-  src->pub.next_input_byte = src->buffer;
+  int buffer_size = header_length + data_length;
+  JOCTET *buffer = (*cinfo->mem->alloc_large)((j_common_ptr) cinfo,
+                                              JPOOL_IMAGE, buffer_size);
 
   // read in the 2 parts
-  //  g_debug("reading header from %"G_GINT64_FORMAT, header_start_position);
+  //  g_debug("reading header from %"PRId64, header_start_position);
   if (fseeko(infile, header_start_position, SEEK_SET)) {
     _openslide_io_error(err, "Couldn't seek to header start");
     return false;
   }
-  if (!fread(src->buffer, header_length, 1, infile)) {
+  if (!fread(buffer, header_length, 1, infile)) {
     g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                "Cannot read header in JPEG at %"G_GINT64_FORMAT,
+                "Cannot read header in JPEG at %"PRId64,
                 header_start_position);
     return false;
   }
 
   if (data_length) {
-    //  g_debug("reading from %" G_GINT64_FORMAT, start_position);
+    //  g_debug("reading from %"PRId64, start_position);
     if (fseeko(infile, start_position, SEEK_SET)) {
       _openslide_io_error(err, "Couldn't seek to data start");
       return false;
     }
-    if (!fread(src->buffer + header_length, data_length, 1, infile)) {
+    if (!fread(buffer + header_length, data_length, 1, infile)) {
       g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                  "Cannot read data in JPEG at %"G_GINT64_FORMAT,
-                  start_position);
+                  "Cannot read data in JPEG at %"PRId64, start_position);
       return false;
     }
 
     // change the final byte to EOI
-    if (src->buffer[src->buffer_size - 2] != 0xFF) {
+    if (buffer[buffer_size - 2] != 0xFF) {
       g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                   "Expected 0xFF byte at end of JPEG data");
       return false;
     }
-    src->buffer[src->buffer_size - 1] = JPEG_EOI;
+    buffer[buffer_size - 1] = JPEG_EOI;
   }
 
   // check for overlarge or 0 X/Y in SOF (some NDPI JPEGs have this)
   // change them to a value libjpeg will accept
   int64_t size_offset = sof_position - header_start_position + 5;
-  uint16_t y = (src->buffer[size_offset + 0] << 8) +
-                src->buffer[size_offset + 1];
+  uint16_t y = (buffer[size_offset + 0] << 8) +
+                buffer[size_offset + 1];
   if (y > JPEG_MAX_DIMENSION || y == 0) {
     //g_debug("fixing up SOF Y");
-    src->buffer[size_offset + 0] = JPEG_MAX_DIMENSION_HIGH;
-    src->buffer[size_offset + 1] = JPEG_MAX_DIMENSION_LOW;
+    buffer[size_offset + 0] = JPEG_MAX_DIMENSION_HIGH;
+    buffer[size_offset + 1] = JPEG_MAX_DIMENSION_LOW;
   }
-  uint16_t x = (src->buffer[size_offset + 2] << 8) +
-                src->buffer[size_offset + 3];
+  uint16_t x = (buffer[size_offset + 2] << 8) +
+                buffer[size_offset + 3];
   if (x > JPEG_MAX_DIMENSION || x == 0) {
     //g_debug("fixing up SOF X");
-    src->buffer[size_offset + 2] = JPEG_MAX_DIMENSION_HIGH;
-    src->buffer[size_offset + 3] = JPEG_MAX_DIMENSION_LOW;
+    buffer[size_offset + 2] = JPEG_MAX_DIMENSION_HIGH;
+    buffer[size_offset + 3] = JPEG_MAX_DIMENSION_LOW;
   }
 
-  return true;
-}
+  // pass the buffer off to mem_src
+  _openslide_jpeg_mem_src(cinfo, buffer, buffer_size);
 
-// does not destroy cinfo
-static void random_access_src_destroy(j_decompress_ptr cinfo) {
-  struct my_src_mgr *src = (struct my_src_mgr *) cinfo->src;   // sorry
-  g_slice_free1(src->buffer_size, src->buffer);
+  return true;
 }
 
 static void jpeg_level_free(gpointer data) {
@@ -360,12 +315,12 @@ static bool find_bitstream_start(FILE *f,
     pos = ftello(f);
     if (fread(buf, sizeof(buf), 1, f) != 1) {
       g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                  "Couldn't read JPEG marker at %"G_GINT64_FORMAT, pos);
+                  "Couldn't read JPEG marker at %"PRId64, pos);
       return false;
     }
     if (buf[0] != 0xFF) {
       g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                  "Expected marker at %"G_GINT64_FORMAT", found none", pos);
+                  "Expected marker at %"PRId64", found none", pos);
       return false;
     }
     marker_byte = buf[1];
@@ -386,7 +341,7 @@ static bool find_bitstream_start(FILE *f,
     // read length
     if (fread(buf, sizeof(buf), 1, f) != 1) {
       g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                  "Couldn't read JPEG marker length at %"G_GINT64_FORMAT, pos);
+                  "Couldn't read JPEG marker length at %"PRId64, pos);
       return false;
     }
     memcpy(&len, buf, sizeof(len));
@@ -402,7 +357,7 @@ static bool find_bitstream_start(FILE *f,
     if (marker_byte == 0xDA) {
       // found it; done
       *header_stop_position = ftello(f);
-      //g_debug("found bitstream start at %"G_GINT64_FORMAT, *header_stop_position);
+      //g_debug("found bitstream start at %"PRId64, *header_stop_position);
       break;
     }
   }
@@ -438,7 +393,7 @@ static bool find_next_ff_marker(FILE *f,
       size_t result = fread(*buf, bytes_to_read, 1, f);
       if (result == 0) {
         g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                    "Short read searching for JPEG marker at %"G_GINT64_FORMAT,
+                    "Short read searching for JPEG marker at %"PRId64,
                     file_pos);
         return false;
       }
@@ -503,7 +458,7 @@ static bool _compute_mcu_start(struct jpeg *jpeg,
       uint8_t buf[2];
       if (fseeko(f, offset - 2, SEEK_SET)) {
         _openslide_io_error(err, "Couldn't seek to recorded restart "
-                            "marker at %"G_GINT64_FORMAT, offset - 2);
+                            "marker at %"PRId64, offset - 2);
         return false;
       }
 
@@ -511,12 +466,12 @@ static bool _compute_mcu_start(struct jpeg *jpeg,
       if (result == 0 ||
           buf[0] != 0xFF || buf[1] < 0xD0 || buf[1] > 0xD7) {
         g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                    "Restart marker not found at recorded position "
-                    "%"G_GINT64_FORMAT, offset - 2);
+                    "Restart marker not found at recorded position %"PRId64,
+                    offset - 2);
         return false;
       }
 
-      //  g_debug("accepted unreliable marker %"G_GINT64_FORMAT, first_good);
+      //  g_debug("accepted unreliable marker %"PRId64, first_good);
       jpeg->mcu_starts[first_good] = offset;
       break;
     }
@@ -526,7 +481,7 @@ static bool _compute_mcu_start(struct jpeg *jpeg,
     // we're done
     return true;
   }
-  //  g_debug("target: %"G_GINT64_FORMAT", first_good: %"G_GINT64_FORMAT, target, first_good);
+  //  g_debug("target: %"PRId64", first_good: %"PRId64, target, first_good);
 
   // now search for the new restart markers
   if (fseeko(f, jpeg->mcu_starts[first_good], SEEK_SET)) {
@@ -549,7 +504,7 @@ static bool _compute_mcu_start(struct jpeg *jpeg,
       return false;
     }
     g_assert(after_marker_pos > 0);
-    //g_debug("after_marker_pos: %" G_GINT64_FORMAT, after_marker_pos);
+    //g_debug("after_marker_pos: %"PRId64, after_marker_pos);
 
     if (marker_byte >= 0xD0 && marker_byte < 0xD8) {
       // restart marker
@@ -571,7 +526,7 @@ static bool compute_mcu_start(openslide_t *osr,
 
   if (tileno < 0 || tileno >= jpeg->tile_count) {
     g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                "Invalid tileno %"G_GINT64_FORMAT, tileno);
+                "Invalid tileno %"PRId64, tileno);
     return false;
   }
 
@@ -624,14 +579,12 @@ static bool read_from_jpeg(openslide_t *osr,
   }
 
   // begin decompress
-  struct jpeg_decompress_struct cinfo;
-  struct _openslide_jpeg_error_mgr jerr;
+  struct jpeg_decompress_struct *cinfo = _openslide_jpeg_create_decompress();
   jmp_buf env;
 
   volatile gsize row_size = 0;  // preserve across longjmp
 
   JSAMPARRAY buffer = g_slice_alloc0(sizeof(JSAMPROW) * MAX_SAMP_FACTOR);
-  cinfo.rec_outbuf_height = 0;
 
   if (setjmp(env) == 0) {
     // figure out where to start the data stream
@@ -644,56 +597,55 @@ static bool read_from_jpeg(openslide_t *osr,
       goto OUT;
     }
 
-    // set error handler, this will longjmp if necessary
-    cinfo.err = _openslide_jpeg_set_error_handler(&jerr, &env);
-
     // start decompressing
-    jpeg_create_decompress(&cinfo);
+    _openslide_jpeg_init_decompress(cinfo, &env);
 
-    if (!jpeg_random_access_src(&cinfo, f,
+    if (!jpeg_random_access_src(cinfo, f,
                                 jpeg->start_in_file,
                                 jpeg->sof_position,
                                 jpeg->header_stop_position,
                                 start_position,
                                 stop_position,
                                 err)) {
-      goto OUT_JPEG;
+      goto OUT;
     }
 
-    jpeg_read_header(&cinfo, TRUE);
-    cinfo.scale_num = 1;
-    cinfo.scale_denom = scale_denom;
-    cinfo.image_width = jpeg->tile_width;  // cunning
-    cinfo.image_height = jpeg->tile_height;
-    cinfo.out_color_space = JCS_RGB;
+    jpeg_read_header(cinfo, TRUE);
+    cinfo->scale_num = 1;
+    cinfo->scale_denom = scale_denom;
+    cinfo->image_width = jpeg->tile_width;  // cunning
+    cinfo->image_height = jpeg->tile_height;
+    cinfo->out_color_space = JCS_RGB;
 
-    jpeg_start_decompress(&cinfo);
+    jpeg_start_decompress(cinfo);
 
-    //    g_debug("output_width: %d", cinfo.output_width);
-    //    g_debug("output_height: %d", cinfo.output_height);
+    //    g_debug("output_width: %d", cinfo->output_width);
+    //    g_debug("output_height: %d", cinfo->output_height);
 
     // allocate scanline buffers
-    row_size = sizeof(JSAMPLE) * cinfo.output_width * cinfo.output_components;
-    for (int i = 0; i < cinfo.rec_outbuf_height; i++) {
+    row_size = sizeof(JSAMPLE) * cinfo->output_width *
+               cinfo->output_components;
+    for (int i = 0; i < cinfo->rec_outbuf_height; i++) {
       buffer[i] = g_slice_alloc(row_size);
       //g_debug("buffer[%d]: %p", i, buffer[i]);
     }
 
-    if ((cinfo.output_width != (unsigned int) w) || (cinfo.output_height != (unsigned int) h)) {
+    if (cinfo->output_width != (unsigned int) w ||
+        cinfo->output_height != (unsigned int) h) {
       g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                   "Dimensional mismatch in read_from_jpeg, "
                   "expected %dx%d, got %dx%d",
-                  w, h, cinfo.output_width, cinfo.output_height);
-      goto OUT_JPEG;
+                  w, h, cinfo->output_width, cinfo->output_height);
+      goto OUT;
     }
 
     // decompress
     uint32_t *jpeg_dest = dest;
-    while (cinfo.output_scanline < cinfo.output_height) {
-      JDIMENSION rows_read = jpeg_read_scanlines(&cinfo,
+    while (cinfo->output_scanline < cinfo->output_height) {
+      JDIMENSION rows_read = jpeg_read_scanlines(cinfo,
                                                  buffer,
-                                                 cinfo.rec_outbuf_height);
-      //g_debug("just read scanline %d", cinfo.output_scanline - rows_read);
+                                                 cinfo->rec_outbuf_height);
+      //g_debug("just read scanline %d", cinfo->output_scanline - rows_read);
       //g_debug(" rows read: %d", rows_read);
       int cur_buffer = 0;
       while (rows_read > 0) {
@@ -708,29 +660,24 @@ static bool read_from_jpeg(openslide_t *osr,
 
         // advance everything 1 row
         cur_buffer++;
-        jpeg_dest += cinfo.output_width;
+        jpeg_dest += cinfo->output_width;
         rows_read--;
       }
     }
     success = true;
   } else {
     // setjmp returns again
-    g_propagate_error(err, jerr.err);
+    _openslide_jpeg_propagate_error(err, cinfo);
   }
-
-OUT_JPEG:
-  (void) 0; // dummy statement for label
-
-  // stop jpeg
-  random_access_src_destroy(&cinfo);
-  jpeg_destroy_decompress(&cinfo);
 
 OUT:
   // free buffers
-  for (int i = 0; i < cinfo.rec_outbuf_height; i++) {
+  for (int i = 0; i < cinfo->rec_outbuf_height; i++) {
     g_slice_free1(row_size, buffer[i]);
   }
   g_slice_free1(sizeof(JSAMPROW) * MAX_SAMP_FACTOR, buffer);
+
+  _openslide_jpeg_destroy_decompress(cinfo);
 
   fclose(f);
 
@@ -1013,7 +960,8 @@ static gpointer restart_marker_thread_func(gpointer d) {
     // should we sleep?
     double time_to_sleep = 1.0 - g_timer_elapsed(data->restart_marker_timer,
 						 NULL);
-    if (time_to_sleep > 0) {
+    if (data->restart_marker_thread_throttle &&
+        time_to_sleep > 0) {
       GTimeVal abstime;
       gulong sleep_time = G_USEC_PER_SEC * time_to_sleep;
 
@@ -1083,8 +1031,6 @@ static bool validate_jpeg_header(FILE *f, bool use_jpeg_dimensions,
                                  int64_t *sof_position,
                                  int64_t *header_stop_position,
                                  char **comment, GError **err) {
-  struct jpeg_decompress_struct cinfo;
-  struct _openslide_jpeg_error_mgr jerr;
   jmp_buf env;
   bool success = false;
 
@@ -1098,10 +1044,11 @@ static bool validate_jpeg_header(FILE *f, bool use_jpeg_dimensions,
     return false;
   }
 
+  struct jpeg_decompress_struct *cinfo = _openslide_jpeg_create_decompress();
+
   if (setjmp(env) == 0) {
-    cinfo.err = _openslide_jpeg_set_error_handler(&jerr, &env);
-    jpeg_create_decompress(&cinfo);
-    if (!jpeg_random_access_src(&cinfo, f,
+    _openslide_jpeg_init_decompress(cinfo, &env);
+    if (!jpeg_random_access_src(cinfo, f,
                                 header_start, *sof_position,
                                 *header_stop_position, -1, -1, err)) {
       goto DONE;
@@ -1111,86 +1058,85 @@ static bool validate_jpeg_header(FILE *f, bool use_jpeg_dimensions,
 
     if (comment) {
       // extract comment
-      jpeg_save_markers(&cinfo, JPEG_COM, 0xFFFF);
+      jpeg_save_markers(cinfo, JPEG_COM, 0xFFFF);
     }
 
-    header_result = jpeg_read_header(&cinfo, TRUE);
+    header_result = jpeg_read_header(cinfo, TRUE);
     if (header_result != JPEG_HEADER_OK
         && header_result != JPEG_HEADER_TABLES_ONLY) {
       g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                   "Couldn't read JPEG header");
       goto DONE;
     }
-    if (cinfo.num_components != 3) {
+    if (cinfo->num_components != 3) {
       g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                   "JPEG color components != 3");
       goto DONE;
     }
-    if (cinfo.restart_interval == 0) {
+    if (cinfo->restart_interval == 0) {
       g_set_error(err, OPENSLIDE_HAMAMATSU_ERROR,
                   OPENSLIDE_HAMAMATSU_ERROR_NO_RESTART_MARKERS,
                   "No restart markers");
       goto DONE;
     }
 
-    jpeg_start_decompress(&cinfo);
+    jpeg_start_decompress(cinfo);
 
     if (comment) {
-      if (cinfo.marker_list) {
+      if (cinfo->marker_list) {
 	// copy everything out
-	char *com = g_strndup((const gchar *) cinfo.marker_list->data,
-			      cinfo.marker_list->data_length);
+	char *com = g_strndup((const gchar *) cinfo->marker_list->data,
+			      cinfo->marker_list->data_length);
 	// but only really save everything up to the first '\0'
 	*comment = g_strdup(com);
 	g_free(com);
       }
-      jpeg_save_markers(&cinfo, JPEG_COM, 0);  // stop saving
+      jpeg_save_markers(cinfo, JPEG_COM, 0);  // stop saving
     }
 
     if (use_jpeg_dimensions) {
-      *w = cinfo.output_width;
-      *h = cinfo.output_height;
+      *w = cinfo->output_width;
+      *h = cinfo->output_height;
     }
 
     int32_t mcu_width = DCTSIZE;
     int32_t mcu_height = DCTSIZE;
-    if (cinfo.comps_in_scan > 1) {
-      mcu_width = cinfo.max_h_samp_factor * DCTSIZE;
-      mcu_height = cinfo.max_v_samp_factor * DCTSIZE;
+    if (cinfo->comps_in_scan > 1) {
+      mcu_width = cinfo->max_h_samp_factor * DCTSIZE;
+      mcu_height = cinfo->max_v_samp_factor * DCTSIZE;
     }
 
-    // don't trust cinfo.MCUs_per_row, since it's based on libjpeg's belief
+    // don't trust cinfo->MCUs_per_row, since it's based on libjpeg's belief
     // about the image width instead of the actual value
     uint32_t mcus_per_row = (*w / mcu_width) + !!(*w % mcu_width);
 
-    if (cinfo.restart_interval > mcus_per_row) {
+    if (cinfo->restart_interval > mcus_per_row) {
       g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                   "Restart interval greater than MCUs per row");
       goto DONE;
     }
 
-    int leftover_mcus = mcus_per_row % cinfo.restart_interval;
+    int leftover_mcus = mcus_per_row % cinfo->restart_interval;
     if (leftover_mcus != 0) {
       g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                   "Inconsistent restart marker spacing within row");
       goto DONE;
     }
 
-    *tw = mcu_width * cinfo.restart_interval;
+    *tw = mcu_width * cinfo->restart_interval;
     *th = mcu_height;
 
-    //g_debug("size: %d %d, tile size: %d %d, mcu size: %d %d, restart_interval: %d, mcus_per_row: %u, leftover mcus: %d", *w, *h, *tw, *th, mcu_width, mcu_height, cinfo.restart_interval, mcus_per_row, leftover_mcus);
+    //g_debug("size: %d %d, tile size: %d %d, mcu size: %d %d, restart_interval: %d, mcus_per_row: %u, leftover mcus: %d", *w, *h, *tw, *th, mcu_width, mcu_height, cinfo->restart_interval, mcus_per_row, leftover_mcus);
   } else {
     // setjmp has returned again
-    g_propagate_error(err, jerr.err);
+    _openslide_jpeg_propagate_error(err, cinfo);
     goto DONE;
   }
 
   success = true;
 
 DONE:
-  random_access_src_destroy(&cinfo);
-  jpeg_destroy_decompress(&cinfo);
+  _openslide_jpeg_destroy_decompress(cinfo);
   return success;
 }
 
@@ -1248,8 +1194,20 @@ static int64_t *extract_one_optimisation(FILE *opt_f,
   return NULL;
 }
 
-static void add_properties(openslide_t *osr, GKeyFile *kf,
-			   const char *group) {
+static void add_mpp_property(openslide_t *osr, GKeyFile *kf,
+                             const char *group, const char *key,
+                             int64_t pixels, const char *property) {
+  int64_t nm = g_key_file_get_int64(kf, group, key, NULL);
+  if (nm > 0) {
+    g_hash_table_insert(osr->properties,
+                        g_strdup(property),
+                        _openslide_format_double(nm / (1000.0 * pixels)));
+  }
+}
+
+static void add_properties(openslide_t *osr,
+                           GKeyFile *kf, const char *group,
+                           struct _openslide_level *level0) {
   char **keys = g_key_file_get_keys(kf, group, NULL, NULL);
   if (keys == NULL) {
     return;
@@ -1271,7 +1229,10 @@ static void add_properties(openslide_t *osr, GKeyFile *kf,
   // but it's better than rounding
   _openslide_duplicate_double_prop(osr, "hamamatsu.SourceLens",
                                    OPENSLIDE_PROPERTY_NAME_OBJECTIVE_POWER);
-  // TODO: can we calculate MPP from PhysicalWidth/PhysicalHeight?
+  add_mpp_property(osr, kf, group, KEY_PHYSICAL_WIDTH, level0->w,
+                   OPENSLIDE_PROPERTY_NAME_MPP_X);
+  add_mpp_property(osr, kf, group, KEY_PHYSICAL_HEIGHT, level0->h,
+                   OPENSLIDE_PROPERTY_NAME_MPP_Y);
 }
 
 // create scale_denom levels
@@ -1401,6 +1362,8 @@ static bool init_jpeg_ops(openslide_t *osr,
   data->restart_marker_mutex = g_mutex_new();
   data->restart_marker_cond = g_cond_new();
   data->restart_marker_cond_mutex = g_mutex_new();
+  data->restart_marker_thread_throttle =
+    !_openslide_debug(OPENSLIDE_DEBUG_JPEG_MARKERS);
   if (background_thread) {
     data->restart_marker_thread = g_thread_create(restart_marker_thread_func,
                                                   osr,
@@ -1627,7 +1590,7 @@ static bool hamamatsu_vms_part2(openslide_t *osr,
   for (int32_t i = 0; i < level_count; i++) {
     struct jpeg_level *l = levels[i];
     g_debug("level %d", i);
-    g_debug(" size %" G_GINT64_FORMAT " %" G_GINT64_FORMAT, l->base.w, l->base.h);
+    g_debug(" size %"PRId64" %"PRId64, l->base.w, l->base.h);
     g_debug(" tile size %d %d", l->tile_width, l->tile_height);
   }
 
@@ -1682,9 +1645,7 @@ static bool ngr_read_tile(openslide_t *osr,
     int64_t offset = l->start_in_file +
       (tile_y * NGR_TILE_HEIGHT * l->column_width * 6) +
       (tile_x * l->base.h * l->column_width * 6);
-    //    g_debug("tile_x: %" G_GINT64_FORMAT ", "
-    //      "tile_y: %" G_GINT64_FORMAT ", "
-    //      "seeking to %" G_GINT64_FORMAT, tile_x, tile_y, offset);
+    //g_debug("tile_x: %"PRId64", tile_y: %"PRId64", seeking to %"PRId64, tile_x, tile_y, offset);
     if (fseeko(f, offset, SEEK_SET)) {
       _openslide_io_error(err, "Couldn't seek to tile offset");
       fclose(f);
@@ -1827,7 +1788,7 @@ static bool hamamatsu_vmu_part2(openslide_t *osr,
     // ensure no remainder on columns
     if ((l->base.w % l->column_width) != 0) {
       g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                  "Width %"G_GINT64_FORMAT" not multiple of column width %d",
+                  "Width %"PRId64" not multiple of column width %d",
                   l->base.w, l->column_width);
       fclose(f);
       goto FAIL;
@@ -1928,9 +1889,6 @@ static bool hamamatsu_vms_vmu_open(openslide_t *osr, const char *filename,
     goto DONE;
   }
 
-  // add properties
-  add_properties(osr, key_file, groupname);
-
   // extract MapFile
   char *tmp;
   tmp = g_key_file_get_string(key_file,
@@ -1962,8 +1920,7 @@ static bool hamamatsu_vms_vmu_open(openslide_t *osr, const char *filename,
 
     //    g_debug("%s", key);
 
-    if (strncmp(KEY_IMAGE_FILE, key, strlen(KEY_IMAGE_FILE)) == 0) {
-      // starts with ImageFile
+    if (g_str_has_prefix(key, KEY_IMAGE_FILE)) {
       char *suffix = key + strlen(KEY_IMAGE_FILE);
 
       int layer;
@@ -2138,6 +2095,11 @@ static bool hamamatsu_vms_vmu_open(openslide_t *osr, const char *filename,
     g_assert_not_reached();
   }
 
+  // now that we have the level 0 dimensions, add properties
+  if (success) {
+    add_properties(osr, key_file, groupname, osr->levels[0]);
+  }
+
  DONE:
   g_free(dirname);
 
@@ -2169,15 +2131,10 @@ static bool hamamatsu_ndpi_detect(const char *filename G_GNUC_UNUSED,
     return false;
   }
 
-  // check Software tag
-  const char *software = _openslide_tifflike_get_buffer(tl, 0,
-                                                        TIFFTAG_SOFTWARE, err);
-  if (software == NULL) {
-    return false;
-  }
-  if (strncmp(software, NDPI_SOFTWARE, strlen(NDPI_SOFTWARE))) {
+  // check for a TIFF tag unique to NDPI and always present in it
+  if (!_openslide_tifflike_get_value_count(tl, 0, NDPI_FORMAT_FLAG)) {
     g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                "Unexpected Software tag");
+                "No TIFF tag %d", NDPI_FORMAT_FLAG);
     return false;
   }
 
@@ -2193,7 +2150,7 @@ static void ndpi_set_sint_prop(openslide_t *osr,
   if (!tmp_err) {
     g_hash_table_insert(osr->properties,
                         g_strdup(property_name),
-                        g_strdup_printf("%"G_GINT64_FORMAT, value));
+                        g_strdup_printf("%"PRId64, value));
   }
   g_clear_error(&tmp_err);
 }
@@ -2328,8 +2285,8 @@ static bool hamamatsu_ndpi_open(openslide_t *osr, const char *filename,
     // check results
     if (height != rows_per_strip) {
       g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                  "Unexpected rows per strip %"G_GINT64_FORMAT" "
-                  "(height %"G_GINT64_FORMAT")", rows_per_strip, height);
+                  "Unexpected rows per strip %"PRId64" (height %"PRId64")",
+                  rows_per_strip, height);
       goto FAIL;
     }
 
@@ -2380,23 +2337,21 @@ static bool hamamatsu_ndpi_open(openslide_t *osr, const char *filename,
         if (g_error_matches(tmp_err, OPENSLIDE_HAMAMATSU_ERROR,
                             OPENSLIDE_HAMAMATSU_ERROR_NO_RESTART_MARKERS)) {
           // non-tiled image
-          //g_debug("non-tiled image %"G_GINT64_FORMAT, dir);
+          //g_debug("non-tiled image %"PRId64, dir);
           g_clear_error(&tmp_err);
           jp_w = jp_tw = width;
           jp_h = jp_th = height;
         } else {
           g_propagate_prefixed_error(err, tmp_err,
                                      "Can't validate JPEG for directory "
-                                     "%"G_GINT64_FORMAT": ", dir);
+                                     "%"PRId64": ", dir);
           goto FAIL;
         }
       }
       if (width != jp_w || height != jp_h) {
         g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                    "JPEG dimension mismatch for directory "
-                    "%"G_GINT64_FORMAT": "
-                    "expected %"G_GINT64_FORMAT"x%"G_GINT64_FORMAT", "
-                    "found %dx%d",
+                    "JPEG dimension mismatch for directory %"PRId64": "
+                    "expected %"PRId64"x%"PRId64", found %dx%d",
                     dir, width, height, jp_w, jp_h);
         goto FAIL;
       }
@@ -2427,7 +2382,7 @@ static bool hamamatsu_ndpi_open(openslide_t *osr, const char *filename,
           _openslide_tifflike_get_value_count(tl, dir, NDPI_MCU_STARTS);
 
         if (mcu_start_count == jp->tile_count) {
-          //g_debug("loading MCU starts for directory %"G_GINT64_FORMAT, dir);
+          //g_debug("loading MCU starts for directory %"PRId64, dir);
           const uint64_t *unreliable_mcu_starts =
             _openslide_tifflike_get_uints(tl, dir, NDPI_MCU_STARTS, NULL);
           if (unreliable_mcu_starts) {
@@ -2435,16 +2390,16 @@ static bool hamamatsu_ndpi_open(openslide_t *osr, const char *filename,
             for (int64_t tile = 0; tile < mcu_start_count; tile++) {
               jp->unreliable_mcu_starts[tile] =
                 jp->start_in_file + unreliable_mcu_starts[tile];
-              //g_debug("mcu start at %"G_GINT64_FORMAT, jp->unreliable_mcu_starts[tile]);
+              //g_debug("mcu start at %"PRId64, jp->unreliable_mcu_starts[tile]);
             }
           } else {
-            //g_debug("failed to load MCU starts for directory %"G_GINT64_FORMAT, dir);
+            //g_debug("failed to load MCU starts for directory %"PRId64, dir);
           }
         }
 
         if (jp->unreliable_mcu_starts == NULL) {
           // no marker positions; scan for them in the background
-          //g_debug("enabling restart marker thread for directory %"G_GINT64_FORMAT, dir);
+          //g_debug("enabling restart marker thread for directory %"PRId64, dir);
           restart_marker_scan = true;
         }
       }
