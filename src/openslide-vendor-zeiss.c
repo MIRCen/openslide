@@ -172,7 +172,7 @@ static bool _openslide_czi_has_data_cameraspec( _openslide_czi * czi );
 static bool _openslide_czi_has_data_systemspec( _openslide_czi * czi );
 
 // Tiles
-static int32_t   _openslide_czi_get_roi_count( _openslide_czi * czi );
+static int32_t   _openslide_czi_get_roi_count( _openslide_czi * czi ) G_GNUC_UNUSED;
 static int32_t   _openslide_czi_get_level_count( _openslide_czi * czi );
 static int32_t   _openslide_czi_get_level_subsampling( _openslide_czi * czi, int32_t level, GError **err );
 static bool      _openslide_czi_get_level_tile_size( _openslide_czi * czi, int32_t level, int32_t * w, int32_t * h, GError ** err );
@@ -184,7 +184,8 @@ static uint8_t * _openslide_czi_load_tile( _openslide_czi * czi, int32_t level, 
 static void      _openslide_czi_pixel_copy( uint8_t * src, uint8_t * dest, int8_t src_pixel_type_size, int8_t dest_pixel_type_size, uint8_t default_value );
 static uint8_t * _openslide_czi_data_convert_to_rgba32( enum czi_pixel_t pixel_type, uint8_t * tile_data, int32_t tile_data_size, int32_t * converted_tile_data_size, GError ** err);
 static uint8_t   _openslide_czi_pixel_type_size( enum czi_pixel_t );
-static bool      _openslide_czi_destroy_tile( _openslide_czi * czi, int32_t level, int64_t uid, GError **err );
+static uint8_t   _openslide_cairo_pixel_type_size( cairo_format_t type );
+static bool      _openslide_czi_destroy_tile( _openslide_czi * czi, int32_t level, int64_t uid, GError **err ) G_GNUC_UNUSED;
 
 // Metadata
 // There is one metadata block per file. In the multi-file case, I guess
@@ -195,18 +196,18 @@ static bool      _openslide_czi_destroy_tile( _openslide_czi * czi, int32_t leve
 static int32_t   _openslide_czi_get_metadata_count( _openslide_czi * czi );
 static char    * _openslide_czi_load_metadata( _openslide_czi * czi, int32_t index, int32_t * buffer_size, GError **err );
 static bool      _openslide_czi_destroy_metadata( _openslide_czi * czi, int32_t index, GError **err );
-/*TODO*/static char    * _openslide_czi_load_subblock_metadata( _openslide_czi * czi, int32_t index, int32_t * buffer_size, GError **err );
-/*TODO*/static bool      _openslide_czi_destroy_subblock_metadata( _openslide_czi * czi, int32_t index, GError **err );
+/*TODO*/ //static char    * _openslide_czi_load_subblock_metadata( _openslide_czi * czi, int32_t index, int32_t * buffer_size, GError **err ) G_GNUC_UNUSED;
+/*TODO*/ //static bool      _openslide_czi_destroy_subblock_metadata( _openslide_czi * czi, int32_t index, GError **err ) G_GNUC_UNUSED;
 // Attachments
 // If a null pointer is returned along with no error, it means that the
 // attachment is not stored in the file
-/*TODO*/static _openslide_czi * _openslide_czi_decode_label( _openslide_czi * czi, GError **err );
-/*TODO*/static _openslide_czi * _openslide_czi_decode_prescan( _openslide_czi * czi, GError **err );
-/*TODO*/static _openslide_czi * _openslide_czi_decode_slide_preview( _openslide_czi * czi, GError **err );
+/*TODO*/static _openslide_czi * _openslide_czi_decode_label( _openslide_czi * czi, GError **err ) G_GNUC_UNUSED;
+/*TODO*/static _openslide_czi * _openslide_czi_decode_prescan( _openslide_czi * czi, GError **err ) G_GNUC_UNUSED;
+/*TODO*/static _openslide_czi * _openslide_czi_decode_slide_preview( _openslide_czi * czi, GError **err ) G_GNUC_UNUSED;
 
 // Openslide utils
 static int32_t   _openslide_get_level_index( openslide_t * osr, struct _openslide_level * level );
-static bool      _openslide_get_resolution( openslide_t * osr, double * mppx, double * mppy, GError **err );
+static bool      _openslide_get_resolution( openslide_t * osr, double * mppx, double * mppy, GError **err ) G_GNUC_UNUSED;
 
 // key:PARSING-PRI-DECL
 //============================================================================
@@ -509,18 +510,18 @@ static bool czi_update_bool_compression( struct _czi * czi, enum czi_compression
 static int32_t czi_cmp_level( const struct _czi_level ** l1, const struct _czi_level ** l2 );
 
 //--- new --------------------------------------------------------------------
-static struct _czi             * czi_new( GError ** err );
-static struct _czi_source      * czi_new_source( GError ** err );
-static struct _czi_file_header * czi_new_file_header( struct _czi * czi, GError ** err );
-static struct _czi_level       * czi_new_level( struct _czi * czi, GError ** err );
-static struct _czi_roi         * czi_new_roi( struct _czi * czi, GError ** err );
-static struct _czi_metadata    * czi_new_metadata( struct _czi * czi, GError ** err );
-/*TODO*/static struct _czi_attachment  * czi_new_attachment( struct _czi * czi, GError ** err );
-static struct _czi_tile        * czi_new_tile( GError ** err );
-static struct _czi_dimension   * czi_new_dimension( struct _czi_tile * tile, GError ** err );
-static int32_t                 * czi_new_S32( int32_t integer, GError ** err );
-static int64_t                 * czi_new_S64( int64_t integer, GError ** err );
-static struct _openslide_czi_tile_descriptor * czi_new_tile_descriptor( struct _czi_tile * tile, GError ** err );
+static struct _czi                              * czi_new( GError ** err );
+static struct _czi_source                       * czi_new_source( GError ** err );
+static struct _czi_file_header                  * czi_new_file_header( struct _czi * czi, GError ** err );
+static struct _czi_level                        * czi_new_level( struct _czi * czi, GError ** err );
+static struct _czi_roi                          * czi_new_roi( struct _czi * czi, GError ** err );
+static struct _czi_metadata                     * czi_new_metadata( struct _czi * czi, GError ** err );
+/*TODO*/static struct _czi_attachment           * czi_new_attachment( struct _czi * czi, GError ** err ) G_GNUC_UNUSED;
+static struct _czi_tile                         * czi_new_tile( GError ** err );
+static struct _czi_dimension                    * czi_new_dimension( struct _czi_tile * tile, GError ** err );
+static int32_t                                  * czi_new_S32( int32_t integer, GError ** err );
+static int64_t                                  * czi_new_S64( int64_t integer, GError ** err );
+static struct _openslide_czi_tile_descriptor    * czi_new_tile_descriptor( struct _czi_tile * tile, GError ** err );
 
 //--- free -------------------------------------------------------------------
 static void czi_free(              struct _czi              * ptr );
@@ -528,7 +529,7 @@ static void czi_free_source(       struct _czi_source       * ptr );
 static void czi_free_file_header(  struct _czi_file_header  * ptr );
 static void czi_free_level(        struct _czi_level        * ptr );
 static void czi_free_metadata(     struct _czi_metadata     * ptr );
-static void czi_free_attachment(   struct _czi_attachment   * ptr );
+static void czi_free_attachment(   struct _czi_attachment   * ptr ) G_GNUC_UNUSED;
 static void czi_free_tile(         struct _czi_tile         * ptr );
 static void czi_free_dimension(    struct _czi_dimension    * ptr );
 static void czi_free_roi(          struct _czi_roi          * ptr );
@@ -539,7 +540,7 @@ static void czi_free_tile_descriptor( struct _openslide_czi_tile_descriptor * pt
 
 //--- read -------------------------------------------------------------------
 static bool czi_parse_directory(  struct _czi_source * source, struct _czi * czi,                     GError ** err );
-/*TODO*/static bool czi_parse_attdir(     struct _czi_source * source, struct _czi * czi,                     GError ** err );
+/*TODO*/static bool czi_parse_attdir(     struct _czi_source * source, struct _czi * czi,                     GError ** err ) G_GNUC_UNUSED;
 static bool czi_read_file_header( struct _czi_source * source, struct _czi_file_header * file_header, GError ** err );
 static bool czi_read_metadata(    struct _czi_source * source, struct _czi_metadata * metadata,       GError ** err );
 static bool czi_read_tile(        struct _czi_source * source, struct _czi_tile * tile,               GError ** err );
@@ -553,17 +554,17 @@ static const char * czi_roi_shape_t_string(         enum czi_roi_shape_t roi_sha
 static const char * czi_roi_covering_mode_t_string( enum czi_roi_covering_mode_t roi_covering_mode );
 
 //--- display ----------------------------------------------------------------
-/*TODO*/static void czi_display(                      struct _czi                           * ptr, uint16_t alignment );
-static void czi_display_source(               struct _czi_source                    * ptr, uint16_t alignment );
-static void czi_display_segment_header(       struct _czi_segment_header            * ptr, uint16_t alignment );
-static void czi_display_file_header(          struct _czi_file_header               * ptr, uint16_t alignment );
-static void czi_display_roi(                  struct _czi_roi                       * ptr, uint16_t alignment );
-static void czi_display_level(                struct _czi_level                     * ptr, uint16_t alignment );
-/*TODO*/static void czi_display_metadata(             struct _czi_metadata                  * ptr, uint16_t alignment );
-/*TODO*/static void czi_display_attachment(           struct _czi_attachment                * ptr, uint16_t alignment );
-static void czi_display_tile(                 struct _czi_tile                      * ptr, uint16_t alignment );
-static void czi_display_dimension(            struct _czi_dimension                 * ptr, uint16_t alignment );
-static void czi_display_tile_descriptor(      struct _openslide_czi_tile_descriptor * ptr, uint16_t alignment );
+/*TODO*/static void czi_display(                      struct _czi                           * ptr, uint16_t alignment ) G_GNUC_UNUSED;
+static void czi_display_source(               struct _czi_source                    * ptr, uint16_t alignment ) G_GNUC_UNUSED;
+static void czi_display_segment_header(       struct _czi_segment_header            * ptr, uint16_t alignment ) G_GNUC_UNUSED;
+static void czi_display_file_header(          struct _czi_file_header               * ptr, uint16_t alignment ) G_GNUC_UNUSED;
+static void czi_display_roi(                  struct _czi_roi                       * ptr, uint16_t alignment ) G_GNUC_UNUSED;
+static void czi_display_level(                struct _czi_level                     * ptr, uint16_t alignment ) G_GNUC_UNUSED;
+/*TODO*/static void czi_display_metadata(             struct _czi_metadata                  * ptr, uint16_t alignment ) G_GNUC_UNUSED;
+/*TODO*/static void czi_display_attachment(           struct _czi_attachment                * ptr, uint16_t alignment ) G_GNUC_UNUSED;
+static void czi_display_tile(                 struct _czi_tile                      * ptr, uint16_t alignment ) G_GNUC_UNUSED;
+static void czi_display_dimension(            struct _czi_dimension                 * ptr, uint16_t alignment ) G_GNUC_UNUSED;
+static void czi_display_tile_descriptor(      struct _openslide_czi_tile_descriptor * ptr, uint16_t alignment ) G_GNUC_UNUSED;
 
 
 //--- navigate in structure --------------------------------------------------
@@ -577,7 +578,7 @@ static bool czi_read_next_segment_header_with_id(
   struct _czi_segment_header  * segmentheader,
   const char                  * id,
   GError                     ** err
-);
+) G_GNUC_UNUSED;
 static bool czi_skip_segment(
   struct _czi_source          * source,
   struct _czi_segment_header  * segmentheader,
@@ -715,7 +716,7 @@ bool czi_find_sources(
   GError      ** err
 )
 {
-  g_debug( "czi_find_sources" );
+  //g_debug( "czi_find_sources" );
   g_assert( filename );
   g_assert( czi );
   struct _czi_source * source;
@@ -760,7 +761,7 @@ bool czi_decode_one_stream(
   GError             ** err
 )
 {
-  g_debug( "czi_decode_one_stream" );
+  ///g_debug( "czi_decode_one_stream" );
   g_assert( source );
   g_assert( czi );
 
@@ -1220,7 +1221,7 @@ bool czi_skip_segment(
 
 bool czi_is_zisraw( FILE * stream, GError ** err )
 {
-  g_debug( "czi_is_zisraw" );
+  //g_debug( "czi_is_zisraw" );
   g_assert( stream );
   int64_t pos = ftello( stream );
 
@@ -1673,7 +1674,7 @@ bool czi_read_file_header(
   GError                  ** err
 )
 {
-  g_debug ( "czi_read_file_header" );
+  //g_debug ( "czi_read_file_header" );
   g_assert( source );
   g_assert( source->stream );
   g_assert( file_header );
@@ -1703,7 +1704,7 @@ bool czi_read_metadata(
   GError               ** err
 )
 {
-  g_debug( "czi_read_metadata" );
+  //g_debug( "czi_read_metadata" );
   g_assert( source );
   g_assert( source->stream );
   g_assert( metadata );
@@ -2004,7 +2005,7 @@ void czi_display_attachment( struct _czi_attachment * ptr,
                      alignment + CZI_DISPLAY_INDENT,
                      "",
                      ptr->file_part);
-    fprintf( stdout, "%*s" "- content_guid: %.*d\n",
+    fprintf( stdout, "%*s" "- content_guid: %.*s\n",
                      alignment + CZI_DISPLAY_INDENT,
                      "",
                      5,
@@ -2546,8 +2547,6 @@ uint8_t * _openslide_czi_get_level_tile_data( _openslide_czi * czi, int32_t leve
   if(!(tile->data_buf)) {
     // Try to load data for tile
     _openslide_czi_load_tile(czi, level, uid, buffer_size, err);
-
-    g_debug("zeiss_tileread::buffer_size: %d", *buffer_size);
   }
   else {
     // Data was already loaded for tile
@@ -3001,7 +3000,7 @@ static const struct _openslide_ops _openslide_ops_zeiss = {
 static bool zeiss_check( _openslide_czi * czi, GError ** err );
 static bool zeiss_set_properties( openslide_t * osr, _openslide_czi * czi, GError ** err );
 static bool zeiss_set_levels( openslide_t * osr, _openslide_czi * czi, GError ** err );
-static bool zeiss_set_rois( openslide_t * osr, _openslide_czi * czi, GError ** err );
+static bool zeiss_set_rois( openslide_t * osr, _openslide_czi * czi, GError ** err ) G_GNUC_UNUSED;
 static bool zeiss_set_grids( openslide_t * osr, _openslide_czi * czi, GError ** err );
 
 //============================================================================
@@ -3070,22 +3069,27 @@ static bool zeiss_set_grids( openslide_t * osr, _openslide_czi * czi, GError ** 
 #define ZEISS_SET_PROP( osr, context, property_format, path_format, ... )             \
   {                                                                                   \
     char *property, *path;                                                            \
-    property = g_strdup_printf( property_format, __VA_ARGS__ );                       \
-    path = g_strdup_printf( path_format, __VA_ARGS__ );                               \
+    property = g_strdup_printf( property_format, ##__VA_ARGS__ );                     \
+    path = g_strdup_printf( path_format, ##__VA_ARGS__ );                             \
     _openslide_xml_set_prop_from_xpath( osr, context, property, path );               \
     g_free( property );                                                               \
     g_free( path );                                                                   \
   }                                                                                   \
   (void)0
 
-#define ZEISS_GET_PROP( osr, property_format, property_value, ... )                   \
+#define ZEISS_GET_FORMATTED_PROP( osr, property_format, property_value, ... )         \
   {                                                                                   \
     char *property;                                                                   \
-    property = g_strdup_printf( property_format, __VA_ARGS__ );                       \
+    property = g_strdup_printf( property_format, ##__VA_ARGS__ );                     \
     property_value = g_hash_table_lookup( osr->properties, property );                \
     g_free( property );                                                               \
   }                                                                                   \
   (void)0
+
+#define ZEISS_GET_PROP( osr, property, property_value )                               \
+  ZEISS_GET_FORMATTED_PROP( osr, property"%s", property_value, "" );                  \
+  (void)0
+
 
 //============================================================================
 //   TEMPORARY HELP: FORMAT-SPECIFIC KEYS
@@ -3524,7 +3528,7 @@ bool zeiss_set_rois(
   char ** l;
 
   // Get block count
-  ZEISS_GET_PROP( osr, ZEISS_ACQBLOCK_COUNT, value, NULL );
+  ZEISS_GET_PROP( osr, ZEISS_ACQBLOCK_COUNT, value );
   block_count = (int32_t)_openslide_parse_double( (const char *)value );
 
   // TODO: Manage multiple block rois
@@ -3540,14 +3544,14 @@ bool zeiss_set_rois(
   for ( int32_t b = 0; b < block_count; ++b )
   {
     // Rois count;
-    ZEISS_GET_PROP( osr, ZEISS_TILEREGION_COUNT, value, b );
+    ZEISS_GET_FORMATTED_PROP( osr, ZEISS_TILEREGION_COUNT, value, b );
     roi_count = (int32_t)_openslide_parse_double( (const char *)value );
 
     // Tiles information
-    ZEISS_GET_PROP( osr, ZEISS_OVERLAP, value, b );
+    ZEISS_GET_FORMATTED_PROP( osr, ZEISS_OVERLAP, value, b );
     overlap = (double)_openslide_parse_double( (const char *)value );
 
-    ZEISS_GET_PROP( osr, ZEISS_COVERING_MODE, value, b );
+    ZEISS_GET_FORMATTED_PROP( osr, ZEISS_COVERING_MODE, value, b );
     if (!strcasecmp(value, czi_cov_aligned_to_global_grid)) {
       covering_mode = ALIGNED_TO_GLOBAL_GRID;
     }
@@ -3563,13 +3567,12 @@ bool zeiss_set_rois(
 
     for ( int32_t r = 0; r < roi_count; ++r)
     {
-      // printf("Region: %d\n", r);
       roi = czi_new_roi(czi, err);
 
       roi->overlap = overlap;
       roi->covering_mode = covering_mode;
 
-      ZEISS_GET_PROP( osr, ZEISS_TILEREGION_CTYPE, value, b, r );
+      ZEISS_GET_FORMATTED_PROP( osr, ZEISS_TILEREGION_CTYPE, value, b, r );
       if (!strcasecmp(value, ellipse)) {
         roi->shape = ELLIPSE;
       }
@@ -3583,13 +3586,13 @@ bool zeiss_set_rois(
         roi->shape = SHP_UNKNOWN;
       }
 
-      ZEISS_GET_PROP( osr, ZEISS_TILEREGION_COLUMNS, value, b, r );
+      ZEISS_GET_FORMATTED_PROP( osr, ZEISS_TILEREGION_COLUMNS, value, b, r );
       roi->columns = (int32_t)_openslide_parse_double( (const char *)value );
 
-      ZEISS_GET_PROP( osr, ZEISS_TILEREGION_ROWS, value, b, r );
+      ZEISS_GET_FORMATTED_PROP( osr, ZEISS_TILEREGION_ROWS, value, b, r );
       roi->rows = (int32_t)_openslide_parse_double( (const char *)value );
 
-      ZEISS_GET_PROP( osr, ZEISS_TILEREGION_CONTOUR, value, b, r );
+      ZEISS_GET_FORMATTED_PROP( osr, ZEISS_TILEREGION_CONTOUR, value, b, r );
       l = g_strsplit( (const char *)value, ",", -1);
 
       if (l[0] != NULL) {
@@ -3610,7 +3613,7 @@ bool zeiss_set_rois(
         return false;
       }
 
-      ZEISS_GET_PROP( osr, ZEISS_TILEREGION_CENTER, value, b, r );
+      ZEISS_GET_FORMATTED_PROP( osr, ZEISS_TILEREGION_CENTER, value, b, r );
       l = g_strsplit( (const char *)value, ",", -1);
 
       if (l[0] != NULL) {
@@ -3720,7 +3723,7 @@ void zeiss_destroy(
   openslide_t * osr
 )
 {
-  g_debug("zeiss_destroy");
+  //g_debug("zeiss_destroy");
   if( osr->data )
     _openslide_czi_free( (_openslide_czi *) osr->data );
   for( int32_t i = 0; i < osr->level_count; ++i )
@@ -3875,7 +3878,7 @@ bool zeiss_tileread(
   GError                   ** err            G_GNUC_UNUSED
 )
 {
-  g_debug("zeiss_tileread");
+  //g_debug("zeiss_tileread");
 
   struct _czi * czi = (struct _czi *)osr->data;
   struct _openslide_czi_tile_descriptor * tile_desc;
@@ -3892,7 +3895,7 @@ bool zeiss_tileread(
                  "Unable to get tile descriptor: %ld", tile_unique_id );
     return false;
   }
-  g_debug("zeiss_tileread::tile %ld", tile_desc->uid);
+  //g_debug("zeiss_tileread::tile %ld", tile_desc->uid);
 
   // Try to get tile data from cache
   struct _openslide_cache_entry *cache_entry;
@@ -3965,40 +3968,13 @@ bool zeiss_tileread(
   return true;
 }
 
-// bool zeiss_tilemap(
-//   openslide_t               * osr       G_GNUC_UNUSED,
-//   cairo_t                   * cr        G_GNUC_UNUSED,
-//   struct _openslide_level   * level     G_GNUC_UNUSED,
-//   int64_t                     tile_col  G_GNUC_UNUSED,
-//   int64_t                     tile_row  G_GNUC_UNUSED,
-//   void                      * tile      G_GNUC_UNUSED,
-//   void                      * arg       G_GNUC_UNUSED,
-//   GError                   ** err       G_GNUC_UNUSED
-// )
-// {
-//   // For mapped grid
-//   return true;
-// }
-
-// void zeiss_tilemap_foreach(
-//   struct _openslide_grid  * grid      G_GNUC_UNUSED,
-//   int64_t                   tile_col  G_GNUC_UNUSED,
-//   int64_t                   tile_row  G_GNUC_UNUSED,
-//   void                    * tile      G_GNUC_UNUSED,
-//   void                    * arg       G_GNUC_UNUSED
-// )
-// {
-//   // I don't know if I need this
-//   return;
-// }
-
 bool zeiss_detect(
   const char                  * filename,
   struct _openslide_tifflike  * tl G_GNUC_UNUSED,
   GError                     ** err
 )
 {
-  g_debug( "zeiss_detect" );
+  //g_debug( "zeiss_detect" );
   if( !_openslide_czi_is_zisraw( filename, err ) )
     return false;
 
@@ -4015,7 +3991,7 @@ bool zeiss_open(
   GError                     ** err
 )
 {
-  g_debug( "zeiss_open" );
+  //g_debug( "zeiss_open" );
   _openslide_czi * czi_descriptor = _openslide_czi_decode( filename, err );
 
   if( !czi_descriptor )
@@ -4055,7 +4031,7 @@ bool zeiss_open(
     return false;
   }
 
-  g_debug( "zeiss_open, ox: %d, oy: %d", ox, oy );
+  //g_debug( "zeiss_open, ox: %d, oy: %d", ox, oy );
 
   return true;
 
