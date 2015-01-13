@@ -192,8 +192,6 @@ int main (int argc, char **argv) {
   int64_t height = g_ascii_strtoll(argv[6], NULL, 10);
   const char *output = argv[7];
 
-  g_debug( "x:%ld, y:%ld", x, y);
-
   // open slide
   openslide_t *osr = openslide_open(slide);
 
