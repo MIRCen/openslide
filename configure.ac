@@ -28,6 +28,12 @@ LT_PREREQ([2.2.5])
 LT_INIT([win32-dll disable-static])
 LT_LANG([Windows Resource])
 AM_CONDITIONAL([WINDOWS_RESOURCES], [test x$RC != x])
+#AM_CONDITIONAL(OPENSLIDE_DEBUG, [test x$OPENSLIDE_DEBUG != x])
+
+# Option for czi debugging
+AC_ARG_ENABLE([debug_czi],
+              [AS_HELP_STRING([--enable-debug-czi], 
+                              [enable debugging command for czi format [default=no]])])
 
 # for windows manifest
 WINDOWS_VERSIONINFO=$(echo "${VERSION}.0.0.0" | cut -f1-4 -d. | tr . ,)
@@ -200,6 +206,14 @@ else
   CFLAG_MS_FORMAT=""
 fi
 AC_SUBST([CFLAG_MS_FORMAT])
+
+# Only for CZI debugging
+AS_IF([test "x$enable_debug_czi" == xyes], [
+  AM_CONDITIONAL(ENABLE_DEBUGCZI, true)
+  CFLAG_VISIBILITY=-fvisibility=default
+  ], [
+  AM_CONDITIONAL(ENABLE_DEBUGCZI, false)
+])
 
 # The min/max glib version is actually 2.16, but glib doesn't have special
 # handling for API changes that old

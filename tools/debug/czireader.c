@@ -182,7 +182,6 @@ int main( int argc, const char **argv )
   // variables
   //--------------------------------------------------------------------------
   char * filename                   = NULL;
-  char * xmlout                     = NULL;
   int    displaysources             = 1;
   int    displaylevels              = 1;
   int    displaytiles               = 1;
@@ -343,7 +342,7 @@ int main( int argc, const char **argv )
           }
 
           if (!czi_write_tile(czi, png, l, tile->uid, &err)) {
-            g_debug(err->message);
+            g_debug("%s", err->message);
             break;
           }
           fclose(png);

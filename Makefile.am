@@ -115,10 +115,6 @@ test_extended_SOURCES = test/test-common.c test/extended.c
 test_extended_CPPFLAGS = $(GLIB2_CFLAGS) -I$(top_srcdir)/src
 test_extended_LDADD = src/libopenslide.la $(GLIB2_LIBS)
 
-<<<<<<< HEAD
-# test_czireader_CPPFLAGS = $(src_libopenslide_la_CPPFLAGS)
-# test_czireader_LDADD = src/libopenslide.la $(src_libopenslide_la_LIBADD)
-=======
 test_mosaic_CPPFLAGS = $(GLIB2_CFLAGS) $(CAIRO_CFLAGS) -I$(top_srcdir)/src
 test_mosaic_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(CAIRO_LIBS)
 
@@ -126,7 +122,6 @@ if CYGWIN_CROSS_TEST
 noinst_PROGRAMS += test/symlink
 test_symlink_LDADD = -lkernel32
 endif
->>>>>>> 2091a1c940b39559148a1e684b37ed3e371f47fc
 
 test/driver: test/driver.in Makefile
 	$(AM_V_GEN)sed -e 's:!!SRCDIR!!:$(abs_srcdir)/test:g' \
@@ -159,6 +154,13 @@ man_MANS += tools/openslide-write-png.1
 tools_openslide_write_png_SOURCES = tools/openslide-tools-common.c tools/openslide-write-png.c
 tools_openslide_write_png_CPPFLAGS = -I$(top_srcdir)/src $(LIBPNG_CFLAGS) $(GLIB2_CFLAGS)
 tools_openslide_write_png_LDADD = src/libopenslide.la $(LIBPNG_LIBS) $(GLIB2_LIBS)
+
+if ENABLE_DEBUGCZI
+bin_PROGRAMS += tools/debug/openslide-debug-czireader
+tools_debug_openslide_debug_czireader_SOURCES = tools/debug/czireader.c
+tools_debug_openslide_debug_czireader_CPPFLAGS = $(src_libopenslide_la_CPPFLAGS) -I$(top_srcdir)/src -I$(top_srcdir)/tools/debug
+tools_debug_openslide_debug_czireader_LDADD = src/libopenslide.la $(src_libopenslide_la_LIBADD)
+endif
 
 # man pages
 EXTRA_DIST += $(man_MANS:=.in)
