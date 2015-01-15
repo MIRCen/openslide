@@ -620,30 +620,6 @@ int32_t _openslide_get_level_index( openslide_t * osr,
   return -1;
 }
 
-// bool _openslide_get_bounds_intersection( struct bounds * a,
-//                                          struct bounds * b,
-//                                          struct bounds * intersection)
-// {
-//   intersection->x = MAX( a->x, b->x );
-//   intersection->y = MAX( a->y, b->y );
-//   intersection->w = MIN( a->x + a->w,
-//                          b->x + b->w ) - intersection->x;
-//   intersection->h = MIN( a->y + a->h,
-//                          b->y + b->h ) - intersection->y;
-
-//   if ((intersection->w <= 0.) || (intersection->h <= 0.)) {
-//     // No intersection between bounds
-//     intersection->x = 0.;
-//     intersection->y = 0.;
-//     intersection->w = 0.;
-//     intersection->h = 0.;
-
-//     return false;
-//   }
-
-//   return true;
-// }
-
 bool do_byte_swap(
   uint8_t   * items,
   uint64_t    count,
