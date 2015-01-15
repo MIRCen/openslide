@@ -41,6 +41,7 @@
 
 //--- openslide --------------------------------------------------------------
 #include "openslide-decode-xml.h"
+#include "openslide-decode-jpeg.h"
 #include "openslide-private.h"
 //--- extern -----------------------------------------------------------------
 // specify which is needed for ZISRAW ".h", ZISRAW ".c", ZEISS ".c"
@@ -172,20 +173,23 @@ static bool _openslide_czi_has_data_cameraspec( _openslide_czi * czi );
 static bool _openslide_czi_has_data_systemspec( _openslide_czi * czi );
 
 // Tiles
-static int32_t   _openslide_czi_get_roi_count( _openslide_czi * czi ) G_GNUC_UNUSED;
-static int32_t   _openslide_czi_get_level_count( _openslide_czi * czi );
-static int32_t   _openslide_czi_get_level_subsampling( _openslide_czi * czi, int32_t level, GError **err );
-static bool      _openslide_czi_get_level_tile_size( _openslide_czi * czi, int32_t level, int32_t * w, int32_t * h, GError ** err );
-static bool      _openslide_czi_get_level_tile_offset( _openslide_czi * czi, int32_t level, int32_t * x, int32_t * y, GError ** err );
-static uint8_t * _openslide_czi_get_level_tile_data( _openslide_czi * czi, int32_t level, int64_t uid, int32_t * buffer_size, GError **err );
-static GList   * _openslide_czi_get_level_tiles( _openslide_czi * czi, int32_t level, GError **err );
-static void      _openslide_czi_free_list_tiles( GList * list );
-static uint8_t * _openslide_czi_load_tile( _openslide_czi * czi, int32_t level, int64_t uid, int32_t * buffer_size, GError **err );
-static void      _openslide_czi_pixel_copy( uint8_t * src, uint8_t * dest, int8_t src_pixel_type_size, int8_t dest_pixel_type_size, uint8_t default_value );
-static uint8_t * _openslide_czi_data_convert_to_rgba32( enum czi_pixel_t pixel_type, uint8_t * tile_data, int32_t tile_data_size, int32_t * converted_tile_data_size, GError ** err);
-static uint8_t   _openslide_czi_pixel_type_size( enum czi_pixel_t );
-static uint8_t   _openslide_cairo_pixel_type_size( cairo_format_t type );
-static bool      _openslide_czi_destroy_tile( _openslide_czi * czi, int32_t level, int64_t uid, GError **err ) G_GNUC_UNUSED;
+static int32_t            _openslide_czi_get_roi_count( _openslide_czi * czi ) G_GNUC_UNUSED;
+static int32_t            _openslide_czi_get_level_count( _openslide_czi * czi );
+static int32_t            _openslide_czi_get_level_subsampling( _openslide_czi * czi, int32_t level, GError **err );
+static struct _czi_tile * _openslide_czi_get_level_tile( _openslide_czi * czi, int32_t level, int64_t uid, GError **err );
+static bool               _openslide_czi_get_level_tile_size( _openslide_czi * czi, int32_t level, int32_t * w, int32_t * h, GError ** err );
+static bool               _openslide_czi_get_level_tile_offset( _openslide_czi * czi, int32_t level, int32_t * x, int32_t * y, GError ** err );
+static uint8_t *          _openslide_czi_get_level_tile_data( _openslide_czi * czi, int32_t level, int64_t uid, int32_t * buffer_size, GError **err );
+static GList   *          _openslide_czi_get_level_tiles( _openslide_czi * czi, int32_t level, GError **err );
+static bool               _openslide_czi_free_level_tile_data( _openslide_czi * czi, int32_t level, int64_t uid, GError **err );
+static void               _openslide_czi_free_list_tiles( GList * list );
+static uint8_t *          _openslide_czi_uncompress_tile( struct _openslide_czi_tile_descriptor * tile_desc, uint8_t * data, int32_t data_size, int32_t * uncompressed_data_size, GError ** err);
+static uint8_t *          _openslide_czi_load_tile( _openslide_czi * czi, int32_t level, int64_t uid, int32_t * buffer_size, GError **err );
+static void               _openslide_czi_pixel_copy( uint8_t * src, uint8_t * dest, int8_t src_pixel_type_size, int8_t dest_pixel_type_size, uint8_t default_value );
+static uint8_t *          _openslide_czi_data_convert_to_rgba32( enum czi_pixel_t pixel_type, uint8_t * tile_data, int32_t tile_data_size, int32_t * converted_tile_data_size, GError ** err);
+static uint8_t            _openslide_czi_pixel_type_size( enum czi_pixel_t );
+static uint8_t            _openslide_cairo_pixel_type_size( cairo_format_t type );
+static bool               _openslide_czi_destroy_tile( _openslide_czi * czi, int32_t level, int64_t uid, GError **err ) G_GNUC_UNUSED;
 
 // Metadata
 // There is one metadata block per file. In the multi-file case, I guess
@@ -2522,16 +2526,13 @@ bool _openslide_czi_get_level_tile_offset(
   return true;
 }
 
-uint8_t * _openslide_czi_get_level_tile_data( _openslide_czi * czi, int32_t level, int64_t uid, int32_t * buffer_size, GError **err )
+struct _czi_tile * _openslide_czi_get_level_tile( _openslide_czi * czi, int32_t level, int64_t uid, GError **err )
 {
-  //   g_debug("_openslide_czi_get_level_tile_offset:: level: %d, level_count: %d", level, czi->levels->len);
-
-  // Get czi level
+    // Get czi level
   struct _czi_level * s_level = g_ptr_array_index( czi->levels, level );
   if( !s_level ) {
     g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                  "Failed to find level %d", level );
-    (*buffer_size) = 0;
     return NULL;
   }
 
@@ -2540,6 +2541,19 @@ uint8_t * _openslide_czi_get_level_tile_data( _openslide_czi * czi, int32_t leve
   if (!tile) {
     g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                  "Failed to find tile %ld", uid );
+    return NULL;
+  }
+
+  return tile;
+}
+
+uint8_t * _openslide_czi_get_level_tile_data( _openslide_czi * czi, int32_t level, int64_t uid, int32_t * buffer_size, GError **err )
+{
+  //   g_debug("_openslide_czi_get_level_tile_offset:: level: %d, level_count: %d", level, czi->levels->len);
+
+  // Get czi tile
+  struct _czi_tile * tile = _openslide_czi_get_level_tile( czi, level, uid, err);
+  if( !tile ) {
     (*buffer_size) = 0;
     return NULL;
   }
@@ -2554,6 +2568,26 @@ uint8_t * _openslide_czi_get_level_tile_data( _openslide_czi * czi, int32_t leve
   }
 
   return tile->data_buf;
+}
+
+bool _openslide_czi_free_level_tile_data( _openslide_czi * czi, int32_t level, int64_t uid, GError **err )
+{
+  // Get czi tile
+  struct _czi_tile * tile = _openslide_czi_get_level_tile( czi, level, uid, err);
+  if( !tile ) {
+    return false;
+  }
+
+  if (tile->data_buf) {
+    //g_debug( "_openslide_czi_free_level_tile_data:: level: %d, uid: %ld", level, uid );
+    g_slice_free1( tile->data_size, tile->data_buf );
+    tile->data_buf = NULL;
+  }
+  else {
+    return false;
+  }
+
+  return true;
 }
 
 GList * _openslide_czi_get_level_tiles(
@@ -2587,6 +2621,172 @@ GList * _openslide_czi_get_level_tiles(
 
   return extern_list;
 }
+
+// bool _openslide_pixel_convert_bgr24_to_argb32( uint8_t * src,
+//                                                uint8_t * dest ) {
+
+//   dest[0] = src[0];
+//   dest[1] = src[1];
+//   dest[2] = src[2];
+//   dest[3] = (uint8_t)255;
+
+//   return true;
+// }
+
+void _openslide_czi_pixel_copy( uint8_t * src,
+                                uint8_t * dest,
+                                int8_t src_pixel_type_size,
+                                int8_t dest_pixel_type_size,
+                                uint8_t default_value ) {
+  uint8_t *p, *d;
+
+  for ( int8_t c = 0; c < dest_pixel_type_size; ++c) {
+    d = (uint8_t *) (dest + c);
+    if ( c < src_pixel_type_size ) {
+      p = (uint8_t *) (src + c);
+      (*d) = (*p);
+    }
+    else {
+      (*d) = default_value;
+    }
+  }
+}
+
+uint8_t * _openslide_czi_data_convert_to_rgba32(
+  enum czi_pixel_t            pixel_type,
+  uint8_t                   * tile_data,
+  int32_t                     tile_data_size,
+  int32_t                   * converted_tile_data_size,
+  GError                   ** err
+)
+{
+  //g_debug("_openslide_czi_data_convert_to_rgba32");
+  const int8_t output_pixel_type_size = 4;
+
+  if (!tile_data) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Unable to convert tile data to rgba32" );
+    g_debug( "_openslide_czi_data_convert_to_rgba32::tile_data is NULL" );
+    return NULL;
+  }
+
+  // TODO: Add support for czi data types coded using more than 4 bytes
+  int8_t czi_pixel_type_size = _openslide_czi_pixel_type_size( pixel_type );
+  if ((!czi_pixel_type_size) || (czi_pixel_type_size > 4)) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Unable to convert tile data to rgba32" );
+    return NULL;
+  }
+
+  (*converted_tile_data_size) = tile_data_size * output_pixel_type_size / czi_pixel_type_size;
+  uint8_t * converted_tile_data = g_slice_alloc0( *converted_tile_data_size );
+  if (!converted_tile_data) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Unable to allocate converted tile data" );
+    return NULL;
+  }
+
+  // g_debug( "_openslide_czi_data_convert_to_rgba32::tile_data_size: %d"
+  //          ", converted_tile_data_size: %d"
+  //          ", output_pixel_type_size: %d"
+  //          ", czi_pixel_type_size: %d",
+  //          tile_data_size, *converted_tile_data_size, output_pixel_type_size, czi_pixel_type_size );
+
+  int64_t i, j;
+  for ( i = 0, j = 0;
+        i < tile_data_size;
+        i += czi_pixel_type_size,
+        j += output_pixel_type_size ) {
+    _openslide_czi_pixel_copy( (uint8_t *) (tile_data + i),
+                               (uint8_t *) (converted_tile_data + j),
+                                czi_pixel_type_size,
+                                output_pixel_type_size,
+                                255 );
+  }
+
+  return converted_tile_data;
+}
+
+uint8_t * _openslide_czi_uncompress_tile(
+  struct _openslide_czi_tile_descriptor  * tile_desc,
+  uint8_t                                * data,
+  int32_t                                  data_size,
+  int32_t                                * uncompressed_data_size,
+  GError                                ** err
+)
+{
+
+  uint8_t * uncompressed_data = NULL;
+
+  if (!tile_desc){
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Invalid tile descriptor to uncompress data" );
+    (*uncompressed_data_size) = 0;
+    return NULL;
+  }
+
+  if (!data){
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Invalid data to uncompress" );
+    (*uncompressed_data_size) = 0;
+    return NULL;
+  }
+
+  // Uncompress data using openslide implemented methods
+  switch(tile_desc->compression){
+    case JPEG:
+      (*uncompressed_data_size) = tile_desc->size_x
+                                  * tile_desc->size_y
+                                  * _openslide_czi_pixel_type_size(tile_desc->pixel_type)
+                                  / tile_desc->subsampling_x
+                                  / tile_desc->subsampling_y;
+      uncompressed_data = g_slice_alloc0( *uncompressed_data_size );
+      if ( !_openslide_jpeg_decode_buffer(data, data_size,
+                                          (uint32_t *)uncompressed_data,
+                                          tile_desc->size_x / tile_desc->subsampling_x,
+                                          tile_desc->size_y/ tile_desc->subsampling_y,
+                                          err) ) {
+        g_slice_free1( *uncompressed_data_size,
+                       uncompressed_data );
+        g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                     "Failed to uncompress tile data using method %s",
+                     czi_compression_t_string(tile_desc->compression) );
+        (*uncompressed_data_size) = 0;
+        return NULL;
+      }
+
+      break;
+
+    case JPEGXR:
+    case LZW:
+    case CAMERA_SPEC:
+    case SYSTEM_SPEC:
+      // Compression method is not implemented
+      g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                   "Compression method %s is not yet supported",
+                   czi_compression_t_string(tile_desc->compression) );
+      (*uncompressed_data_size) = 0;
+      return NULL;
+
+    case UNCOMPRESSED:
+      // Data are uncompressed
+      g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                   "Data are uncompressed" );
+      (*uncompressed_data_size) = 0;
+      return NULL;
+
+    default:
+    case CMP_UNKNOWN:
+      // Data are uncompressed
+      g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                   "Compression method is unknown" );
+      (*uncompressed_data_size) = 0;
+      return NULL;
+  }
+
+  return uncompressed_data;
+}
+
 
 uint8_t * _openslide_czi_load_tile(
   _openslide_czi  * czi,
@@ -2652,7 +2852,9 @@ uint8_t * _openslide_czi_load_tile(
   position = ftello(stream) + MAX(208, (20 * dimension_count)) + tile->metadata_size;
   TRY_FSEEKO( stream, position, SEEK_SET, err, "Failed to seek to start data positioni of tile" );
 
-  // Allocate a buffer for tile data.
+  //g_debug("_openslide_czi_load_tile:: tile:%ld, data_size:%d", uid, tile->data_size);
+
+  // Allocate a buffer to read tile data from file without decompression
   tile->data_buf = g_slice_alloc0( tile->data_size );
   if( !tile->data_buf ) {
     g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
@@ -3784,106 +3986,22 @@ bool zeiss_paint_region(
   return success;
 }
 
-// bool _openslide_pixel_convert_bgr24_to_argb32( uint8_t * src,
-//                                                uint8_t * dest ) {
-
-//   dest[0] = src[0];
-//   dest[1] = src[1];
-//   dest[2] = src[2];
-//   dest[3] = (uint8_t)255;
-
-//   return true;
-// }
-
-void _openslide_czi_pixel_copy( uint8_t * src,
-                                uint8_t * dest,
-                                int8_t src_pixel_type_size,
-                                int8_t dest_pixel_type_size,
-                                uint8_t default_value ) {
-  uint8_t *p, *d;
-  for ( int8_t c = 0; c < dest_pixel_type_size; ++c) {
-    d = (uint8_t *) (dest + c);
-    if ( c < src_pixel_type_size ) {
-      p = (uint8_t *) (src + c);
-      (*d) = (*p);
-    }
-    else {
-      (*d) = default_value;
-    }
-  }
-}
-
-uint8_t * _openslide_czi_data_convert_to_rgba32(
-  enum czi_pixel_t            pixel_type,
-  uint8_t                   * tile_data,
-  int32_t                     tile_data_size,
-  int32_t                   * converted_tile_data_size,
-  GError                   ** err
-)
-{
-  //g_debug("_openslide_czi_data_cairo_convert");
-
-  cairo_format_t              cairo_type = CAIRO_FORMAT_ARGB32;
-
-  // TODO: Add support for czi data types coded using more than 4 bytes
-  int8_t czi_pixel_type_size = _openslide_czi_pixel_type_size( pixel_type );
-  if ((!czi_pixel_type_size) || (czi_pixel_type_size > 4)) {
-    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                 "Unable to convert tile data to cairo format" );
-    return NULL;
-  }
-
-  // TODO: Add support for missing cairo data types
-  int8_t cairo_pixel_type_size = _openslide_cairo_pixel_type_size( cairo_type );
-  if (!cairo_pixel_type_size) {
-    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                 "Unable to convert tile data to cairo format" );
-    return NULL;
-  }
-
-  //g_debug("_openslide_czi_data_cairo_convert:: convert from czi data format: %s, pixel_type_size: %d", czi_pixel_t_string( pixel_type ), czi_pixel_type_size );
-
-  (*converted_tile_data_size) = cairo_pixel_type_size * tile_data_size / czi_pixel_type_size;
-  uint8_t * converted_tile_data = g_slice_alloc0( *converted_tile_data_size );
-  if (!converted_tile_data) {
-    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                 "Unable to allocate converted tile data" );
-    return NULL;
-  }
-
-  // TODO: change pixel size of their type
-  for ( int64_t i = 0, j = 0;
-        i < tile_data_size;
-        i += czi_pixel_type_size,
-        j += cairo_pixel_type_size ) {
-    // _openslide_convert_bgr24_to_argb32( (uint8_t *) (tile_data + i),
-    //                                     (uint8_t *) (converted_tile_data + j) );
-    _openslide_czi_pixel_copy( (uint8_t *) (tile_data + i),
-                               (uint8_t *) (converted_tile_data + j),
-                                czi_pixel_type_size,
-                                cairo_pixel_type_size,
-                                255 );
-  }
-
-  return converted_tile_data;
-}
-
 bool zeiss_tileread(
-  openslide_t               * osr            G_GNUC_UNUSED,
-  cairo_t                   * cr             G_GNUC_UNUSED,
-  struct _openslide_level   * level          G_GNUC_UNUSED,
-  int64_t                     tile_unique_id G_GNUC_UNUSED,
-  void                      * tile           G_GNUC_UNUSED,
+  openslide_t               * osr,
+  cairo_t                   * cr,
+  struct _openslide_level   * level,
+  int64_t                     tile_unique_id,
+  void                      * tile,
   void                      * arg            G_GNUC_UNUSED,
-  GError                   ** err            G_GNUC_UNUSED
+  GError                   ** err
 )
 {
   //g_debug("zeiss_tileread");
 
   struct _czi * czi = (struct _czi *)osr->data;
   struct _openslide_czi_tile_descriptor * tile_desc;
-  int32_t data_size = 0, converted_tile_data_size = 0;
-  uint8_t * converted_tile_data;
+  int32_t data_size = 0, internal_data_size = 0;
+  uint8_t * tile_data, * internal_tile_data;
   int32_t l = _openslide_get_level_index(osr, level);
   cairo_format_t format = CAIRO_FORMAT_ARGB32;
 
@@ -3899,22 +4017,31 @@ bool zeiss_tileread(
 
   // Try to get tile data from cache
   struct _openslide_cache_entry *cache_entry;
-  converted_tile_data = _openslide_cache_get(
-                                    osr->cache,
+  tile_data = _openslide_cache_get( osr->cache,
                                     level, tile_desc->start_x,
                                     tile_desc->start_y,
                                     &cache_entry );
 
-  if (!converted_tile_data) {
+  if (!tile_data) {
 
     // Load tile data from czi format (BGR_24, BGRA_32, ...)
-    uint8_t * tile_data = _openslide_czi_get_level_tile_data(
-                                                    czi,
+    tile_data = _openslide_czi_get_level_tile_data( czi,
                                                     l,
                                                     tile_desc->uid,
                                                     &data_size,
                                                     err );
-
+    // g_debug( "zeiss_tileread:: uid: %ld"
+    //          ", data_size: %d"
+    //          ", size_x: %d"
+    //          ", size_y: %d"
+    //          ", subsampling_x: %d"
+    //          ", subsampling_y: %d",
+    //          tile_desc->uid,
+    //          data_size,
+    //          tile_desc->size_x,
+    //          tile_desc->size_y,
+    //          tile_desc->subsampling_x,
+    //          tile_desc->subsampling_y );
     if (!tile_data) {
       g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                   "Unable to get data for tile uid: %ld", tile_desc->uid );
@@ -3922,17 +4049,49 @@ bool zeiss_tileread(
       return false;
     }
 
-    // Convert tile data to cairo format ARGB_32
-    converted_tile_data = _openslide_czi_data_convert_to_rgba32(
+    // Uncompress tile data if needed
+    if (tile_desc->compression != UNCOMPRESSED) {
+
+      internal_tile_data = _openslide_czi_uncompress_tile( tile_desc,
+                                                           tile_data,
+                                                           data_size,
+                                                           &internal_data_size,
+                                                           err );
+      if (!internal_tile_data)
+        return false;
+
+      // Free loaded tile data
+      _openslide_czi_free_level_tile_data( czi,
+                                           l,
+                                           tile_desc->uid,
+                                           err );
+
+      // Set uncompressed tile data information
+      tile_data = internal_tile_data;
+      data_size = internal_data_size;
+    }
+
+    // Convert tile data to RGBA_32 buffer that is used in cairo
+    internal_tile_data = _openslide_czi_data_convert_to_rgba32(
                                       tile_desc->pixel_type,
                                       tile_data,
                                       data_size,
-                                      &converted_tile_data_size,
+                                      &internal_data_size,
                                       err );
-    // Free loaded tile data
-    g_slice_free1( data_size, tile_data );
 
-    if (!converted_tile_data) {
+    if (tile_desc->compression != UNCOMPRESSED) {
+      // Free uncompressed tile data
+      g_slice_free1( data_size, tile_data );
+    }
+    else {
+      // Free loaded tile data
+      _openslide_czi_free_level_tile_data( czi,
+                                           l,
+                                           tile_desc->uid,
+                                           err );
+    }
+
+    if (!internal_tile_data) {
       g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                   "Unable to convert data to cairo format for tile uid: %ld",
                   tile_desc->uid );
@@ -3940,10 +4099,14 @@ bool zeiss_tileread(
       return false;
     }
 
+    // Set RGBA_32 converted tile data information
+    tile_data = internal_tile_data;
+    data_size = internal_data_size;
+
     // Put tile data in the cache
     _openslide_cache_put( osr->cache,
                           level, tile_desc->start_x, tile_desc->start_y,
-                          converted_tile_data, converted_tile_data_size,
+                          tile_data, data_size,
                           &cache_entry );
   }
 
@@ -3953,7 +4116,7 @@ bool zeiss_tileread(
   int32_t height = tile_desc->size_y / level->downsample;
   int32_t stride = cairo_format_stride_for_width (format, width);
 
-  cairo_surface_t *surface = cairo_image_surface_create_for_data( converted_tile_data,
+  cairo_surface_t *surface = cairo_image_surface_create_for_data( tile_data,
                                                                   format,
                                                                   width,
                                                                   height,
