@@ -188,7 +188,6 @@ static uint8_t *          _openslide_czi_load_tile( _openslide_czi * czi, int32_
 static void               _openslide_czi_pixel_copy( uint8_t * src, uint8_t * dest, int8_t src_pixel_type_size, int8_t dest_pixel_type_size, uint8_t default_value );
 static uint8_t *          _openslide_czi_data_convert_to_rgba32( enum czi_pixel_t pixel_type, uint8_t * tile_data, int32_t tile_data_size, int32_t * converted_tile_data_size, GError ** err);
 static uint8_t            _openslide_czi_pixel_type_size( enum czi_pixel_t );
-static uint8_t            _openslide_cairo_pixel_type_size( cairo_format_t type );
 static bool               _openslide_czi_destroy_tile( _openslide_czi * czi, int32_t level, int64_t uid, GError **err ) G_GNUC_UNUSED;
 
 // Metadata
@@ -2373,26 +2372,6 @@ uint8_t _openslide_czi_pixel_type_size( enum czi_pixel_t type ) {
   }
 }
 
-uint8_t _openslide_cairo_pixel_type_size( cairo_format_t type ) {
-  switch(type) {
-    case CAIRO_FORMAT_A8:
-      return 1;
-
-    case CAIRO_FORMAT_RGB24:
-      return 3;
-
-    case CAIRO_FORMAT_ARGB32:
-      return 4;
-
-    // Unsupported cases
-    case CAIRO_FORMAT_RGB16_565:
-    //case CAIRO_FORMAT_RGB30:
-    case CAIRO_FORMAT_A1:
-    default:
-      return 0;
-  }
-}
-
 int32_t _openslide_czi_get_roi_count( _openslide_czi  * czi )
 {
   return czi->rois->len;
@@ -3158,25 +3137,6 @@ static bool zeiss_tileread(
   GError                   ** err
 );
 
-// static bool zeiss_tilemap(
-//   openslide_t               * osr,
-//   cairo_t                   * cr,
-//   struct _openslide_level   * level,
-//   int64_t                     tile_col,
-//   int64_t                     tile_row,
-//   void                      * tile,
-//   void                      * arg,
-//   GError                   ** err
-// );
-
-// static void zeiss_tilemap_foreach(
-//   struct _openslide_grid  * grid,
-//   int64_t                   tile_col,
-//   int64_t                   tile_row,
-//   void                    * tile,
-//   void                    * arg
-// );
-
 //============================================================================
 //   STRUCTURE
 //============================================================================
@@ -3692,9 +3652,9 @@ bool zeiss_set_levels(
     }
     level = g_slice_alloc0( sizeof( struct _openslide_level ) );
     level->downsample = (double) subsampling;
-    w = g_hash_table_lookup( osr->properties, ZEISS_VOXELSIZE_X );
+    w = g_hash_table_lookup( osr->properties, ZEISS_IMAGESIZE_X );
     level->w = (int64_t)( _openslide_parse_double( w ) / level->downsample );
-    h = g_hash_table_lookup( osr->properties, ZEISS_VOXELSIZE_Y );
+    h = g_hash_table_lookup( osr->properties, ZEISS_IMAGESIZE_Y );
     level->h = (int64_t)( _openslide_parse_double( h ) / level->downsample );
     if( !_openslide_czi_get_level_tile_size( czi, i, &tw, &th, err ) ) {
       g_slice_free( struct _openslide_level, level );
@@ -3704,7 +3664,6 @@ bool zeiss_set_levels(
     }
     level->tile_w = (int64_t) tw;
     level->tile_h = (int64_t) th;
-    //g_debug("level: %d tile_w: %ld, tile_h: %ld", subsampling, level->tile_w, level->tile_h);
     g_ptr_array_add( array_levels, level );
   }
 
