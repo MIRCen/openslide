@@ -42,6 +42,9 @@
 //--- openslide --------------------------------------------------------------
 #include "openslide-decode-xml.h"
 #include "openslide-decode-jpeg.h"
+#ifdef HAVE_LIBJXR
+#include "openslide-decode-jxr.h"
+#endif //HAVE_LIBJXR
 #include "openslide-private.h"
 //--- extern -----------------------------------------------------------------
 // specify which is needed for ZISRAW ".h", ZISRAW ".c", ZEISS ".c"
@@ -2713,6 +2716,11 @@ uint8_t * _openslide_czi_uncompress_tile(
       break;
 
     case JPEGXR:
+#ifdef HAVE_LIBJXR
+
+      break;
+#endif //HAVE_LIBJXR
+
     case LZW:
     case CAMERA_SPEC:
     case SYSTEM_SPEC:
@@ -3314,11 +3322,15 @@ bool zeiss_check(
                  "Multiple channels not supported" );
     return false;
   }
+
+#ifndef HAVE_LIBJXR
   if( _openslide_czi_has_data_jpgxr( czi ) ) {
     g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                  "JPEGXR compression not supported" );
     return false;
   }
+#endif
+
   if( _openslide_czi_has_data_lzw( czi ) ) {
     g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                  "LZW compression not supported" );

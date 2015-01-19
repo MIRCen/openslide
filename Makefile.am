@@ -14,7 +14,7 @@ lib_LTLIBRARIES = src/libopenslide.la
 
 src_libopenslide_la_LIBADD = $(GLIB2_LIBS) $(CAIRO_LIBS) $(SQLITE3_LIBS) \
 	$(LIBXML2_LIBS) $(OPENJPEG_LIBS) $(LIBTIFF_LIBS) $(LIBPNG_LIBS) \
-	$(GDKPIXBUF_LIBS) $(ZLIB_LIBS)
+	$(GDKPIXBUF_LIBS) $(ZLIB_LIBS) $(LIBJXR_LIBS)
 
 src_libopenslide_la_SOURCES = \
 	src/openslide.c \
@@ -22,6 +22,7 @@ src_libopenslide_la_SOURCES = \
 	src/openslide-decode-gdkpixbuf.c \
 	src/openslide-decode-jp2k.c \
 	src/openslide-decode-jpeg.c \
+	src/openslide-decode-jxr.c \
 	src/openslide-decode-png.c \
 	src/openslide-decode-sqlite.c \
 	src/openslide-decode-tiff.c \
@@ -64,7 +65,7 @@ endif
 src_libopenslide_la_CPPFLAGS = -pedantic -D_OPENSLIDE_BUILDING_DLL \
 	$(GLIB2_CFLAGS) $(CAIRO_CFLAGS) $(SQLITE3_CFLAGS) $(LIBXML2_CFLAGS) \
 	$(OPENJPEG_CFLAGS) $(LIBTIFF_CFLAGS) $(LIBPNG_CFLAGS) \
-	$(GDKPIXBUF_CFLAGS) $(ZLIB_CFLAGS) -DG_LOG_DOMAIN=\"Openslide\" \
+	$(GDKPIXBUF_CFLAGS) $(ZLIB_CFLAGS) $(LIBJXR_CFLAGS) -DG_LOG_DOMAIN=\"Openslide\" \
 	-I$(top_srcdir)/src
 
 src_libopenslide_la_LDFLAGS = -version-info 4:0:4 -no-undefined
@@ -79,6 +80,7 @@ noinst_HEADERS = \
 	src/openslide-decode-gdkpixbuf.h \
 	src/openslide-decode-jp2k.h \
 	src/openslide-decode-jpeg.h \
+	src/openslide-decode-jxr.h \
 	src/openslide-decode-png.h \
 	src/openslide-decode-sqlite.h \
 	src/openslide-decode-tiff.h \
@@ -97,29 +99,29 @@ noinst_SCRIPTS = test/driver
 CLEANFILES += test/driver
 EXTRA_DIST += test/driver.in
 
-test_test_CPPFLAGS = $(GLIB2_CFLAGS) $(CAIRO_CFLAGS) $(VALGRIND_CFLAGS) -I$(top_srcdir)/src
+test_test_CPPFLAGS = $(GLIB2_CFLAGS) $(CAIRO_CFLAGS) $(VALGRIND_CFLAGS) $(LIBJXR_CFLAGS) -I$(top_srcdir)/src
 # VALGRIND_LIBS not needed
-test_test_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(CAIRO_LIBS)
+test_test_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(CAIRO_LIBS) $(LIBJXR_LIBS)
 
 test_try_open_SOURCES = test/test-common.c test/try_open.c
-test_try_open_CPPFLAGS = $(GLIB2_CFLAGS) -I$(top_srcdir)/src
-test_try_open_LDADD = src/libopenslide.la $(GLIB2_LIBS)
+test_try_open_CPPFLAGS = $(GLIB2_CFLAGS) $(LIBJXR_CFLAGS) -I$(top_srcdir)/src
+test_try_open_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(LIBJXR_LIBS)
 
-test_parallel_CPPFLAGS = $(GLIB2_CFLAGS) -I$(top_srcdir)/src
-test_parallel_LDADD = src/libopenslide.la $(GLIB2_LIBS)
+test_parallel_CPPFLAGS = $(GLIB2_CFLAGS) $(LIBJXR_CFLAGS) -I$(top_srcdir)/src
+test_parallel_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(LIBJXR_LIBS)
 
-test_query_CPPFLAGS = $(GLIB2_CFLAGS) -I$(top_srcdir)/src
-test_query_LDADD = src/libopenslide.la $(GLIB2_LIBS)
+test_query_CPPFLAGS = $(GLIB2_CFLAGS) $(LIBJXR_CFLAGS) -I$(top_srcdir)/src
+test_query_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(LIBJXR_LIBS)
 
 test_extended_SOURCES = test/test-common.c test/extended.c
-test_extended_CPPFLAGS = $(GLIB2_CFLAGS) -I$(top_srcdir)/src
-test_extended_LDADD = src/libopenslide.la $(GLIB2_LIBS)
+test_extended_CPPFLAGS = $(GLIB2_CFLAGS) $(LIBJXR_CFLAGS) -I$(top_srcdir)/src
+test_extended_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(LIBJXR_LIBS)
 
 # test_czireader_CPPFLAGS = $(src_libopenslide_la_CPPFLAGS)
 # test_czireader_LDADD = src/libopenslide.la $(src_libopenslide_la_LIBADD)
 
-test_mosaic_CPPFLAGS = $(GLIB2_CFLAGS) $(CAIRO_CFLAGS) -I$(top_srcdir)/src
-test_mosaic_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(CAIRO_LIBS)
+test_mosaic_CPPFLAGS = $(GLIB2_CFLAGS) $(CAIRO_CFLAGS) $(LIBJXR_CFLAGS) -I$(top_srcdir)/src
+test_mosaic_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(CAIRO_LIBS) $(LIBJXR_LIBS)
 
 if CYGWIN_CROSS_TEST
 noinst_PROGRAMS += test/symlink
@@ -141,22 +143,22 @@ test/driver: test/driver.in Makefile
 bin_PROGRAMS = tools/openslide-show-properties
 man_MANS = tools/openslide-show-properties.1
 tools_openslide_show_properties_SOURCES = tools/openslide-tools-common.c tools/openslide-show-properties.c
-tools_openslide_show_properties_CPPFLAGS = -I$(top_srcdir)/src $(GLIB2_CFLAGS)
-tools_openslide_show_properties_LDADD = src/libopenslide.la $(GLIB2_LIBS)
+tools_openslide_show_properties_CPPFLAGS = -I$(top_srcdir)/src $(GLIB2_CFLAGS) $(LIBJXR_CFLAGS)
+tools_openslide_show_properties_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(LIBJXR_LIBS)
 
 # quickhash1sum
 bin_PROGRAMS += tools/openslide-quickhash1sum
 man_MANS += tools/openslide-quickhash1sum.1
 tools_openslide_quickhash1sum_SOURCES = tools/openslide-tools-common.c tools/openslide-quickhash1sum.c
-tools_openslide_quickhash1sum_CPPFLAGS = -I$(top_srcdir)/src $(GLIB2_CFLAGS)
-tools_openslide_quickhash1sum_LDADD = src/libopenslide.la $(GLIB2_LIBS)
+tools_openslide_quickhash1sum_CPPFLAGS = -I$(top_srcdir)/src $(GLIB2_CFLAGS) $(LIBJXR_CFLAGS)
+tools_openslide_quickhash1sum_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(LIBJXR_LIBS)
 
 # write-png
 bin_PROGRAMS += tools/openslide-write-png
 man_MANS += tools/openslide-write-png.1
 tools_openslide_write_png_SOURCES = tools/openslide-tools-common.c tools/openslide-write-png.c
-tools_openslide_write_png_CPPFLAGS = -I$(top_srcdir)/src $(LIBPNG_CFLAGS) $(GLIB2_CFLAGS)
-tools_openslide_write_png_LDADD = src/libopenslide.la $(LIBPNG_LIBS) $(GLIB2_LIBS)
+tools_openslide_write_png_CPPFLAGS = -I$(top_srcdir)/src $(LIBPNG_CFLAGS) $(GLIB2_CFLAGS) $(LIBJXR_CFLAGS)
+tools_openslide_write_png_LDADD = src/libopenslide.la $(LIBPNG_LIBS) $(GLIB2_LIBS) $(LIBJXR_LIBS)
 
 # man pages
 EXTRA_DIST += $(man_MANS:=.in)

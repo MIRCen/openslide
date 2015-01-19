@@ -132,6 +132,10 @@ PKG_CHECK_MODULES(VALGRIND, [valgrind], [
   AC_DEFINE([HAVE_VALGRIND], [1], [Define to 1 if you have the Valgrind headers.])
 ], [:])
 
+PKG_CHECK_MODULES(LIBJXR, [libjxr >= 1.1], [
+  AC_DEFINE([HAVE_LIBJXR], [1], [Define to 1 if you have the JPEG XR librarie and headers installed.])
+], [:])
+
 gl_VISIBILITY
 
 # CLOEXEC
