@@ -26,9 +26,11 @@
 #include <glib.h>
 
 /* JPEG XR support */
-bool _openslide_jxr_decode_buffer(uint32_t *dest,
-                                  int32_t w, int32_t h,
-                                  void *data, int32_t datalen,
-                                  GError **err);
+bool _openslide_jxr_decode_buffer( const void       * data    G_GNUC_UNUSED,
+                                   uint32_t           datalen G_GNUC_UNUSED,
+                                   uint32_t         * dest    G_GNUC_UNUSED,
+                                   int32_t            w       G_GNUC_UNUSED,
+                                   int32_t            h       G_GNUC_UNUSED,
+                                   GError          ** err     G_GNUC_UNUSED );
 
 #endif

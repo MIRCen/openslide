@@ -147,9 +147,42 @@ struct _openslide_czi_tile_descriptor {
   int32_t                 size_y;         // size of the tile (pyr 0 referential)
 };
 
+// Uncompressor structure
+// Made to be able to uncompress data to a destination buffer
+struct _openslide_czi_uncompressor {
+  char * name;                                            // Name of uncompressor
+
+  bool (*uncompress)( const void *data, uint32_t data_size,
+                      uint32_t *dest,
+                      int32_t width, int32_t height,
+                      GError **err );                     // Uncompress method
+};
+
+const struct _openslide_czi_uncompressor _openslide_uncompressor_jpeg = {
+  .name   = "jpeg",
+  .uncompress = _openslide_jpeg_decode_buffer,
+};
+
+#ifdef HAVE_LIBJXR
+
+const struct _openslide_czi_uncompressor _openslide_uncompressor_jxr = {
+  .name   = "jpegxr",
+  .uncompress = _openslide_jxr_decode_buffer,
+};
+
+#endif
+
 // ===========================================================================
 //    PUBLIC METHODS
 // ===========================================================================
+
+// Uncompress
+static uint8_t * _openslide_czi_uncompress( const struct _openslide_czi_uncompressor * uncompressor,
+                                          void * data, int32_t data_size,
+                                          int32_t width, int32_t height,
+                                          enum czi_pixel_t pixel_type,
+                                          int32_t * uncompressed_data_size,
+                                          GError ** err );
 
 // Looks for ZISRAW magic string
 static bool _openslide_czi_is_zisraw( const char * filename, GError ** err );
@@ -2665,6 +2698,44 @@ uint8_t * _openslide_czi_data_convert_to_rgba32(
   return converted_tile_data;
 }
 
+uint8_t * _openslide_czi_uncompress( const struct _openslide_czi_uncompressor * uncompressor,
+                                     void *data, int32_t data_size,
+                                     int32_t width, int32_t height,
+                                     enum czi_pixel_t pixel_type,
+                                     int32_t * uncompressed_data_size,
+                                     GError ** err )
+{
+  if (!uncompressor) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Invalid uncompressor" );
+    *uncompressed_data_size = 0;
+    return NULL;
+  }
+
+  // Allocate destination buffer
+  *uncompressed_data_size = width
+                           * height
+                           * _openslide_czi_pixel_type_size(pixel_type);
+  uint8_t * dest = g_slice_alloc0( *uncompressed_data_size );
+
+  // Uncompress data to destination buffer
+  if ( !uncompressor->uncompress( data, (uint32_t)data_size,
+                                  (uint32_t *)dest,
+                                  width,
+                                  height,
+                                  err ) ) {
+    g_slice_free1( *uncompressed_data_size,
+                   dest );
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to uncompress tile data using uncompressor %s",
+                 uncompressor->name );
+    *uncompressed_data_size = 0;
+    return NULL;
+  }
+
+  return dest;
+}
+
 uint8_t * _openslide_czi_uncompress_tile(
   struct _openslide_czi_tile_descriptor  * tile_desc,
   uint8_t                                * data,
@@ -2691,33 +2762,16 @@ uint8_t * _openslide_czi_uncompress_tile(
   }
 
   // Uncompress data using openslide implemented methods
+  const struct _openslide_czi_uncompressor * uncompressor = NULL;
+
   switch(tile_desc->compression){
     case JPEG:
-      (*uncompressed_data_size) = tile_desc->size_x
-                                  * tile_desc->size_y
-                                  * _openslide_czi_pixel_type_size(tile_desc->pixel_type)
-                                  / tile_desc->subsampling_x
-                                  / tile_desc->subsampling_y;
-      uncompressed_data = g_slice_alloc0( *uncompressed_data_size );
-      if ( !_openslide_jpeg_decode_buffer(data, data_size,
-                                          (uint32_t *)uncompressed_data,
-                                          tile_desc->size_x / tile_desc->subsampling_x,
-                                          tile_desc->size_y/ tile_desc->subsampling_y,
-                                          err) ) {
-        g_slice_free1( *uncompressed_data_size,
-                       uncompressed_data );
-        g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                     "Failed to uncompress tile data using method %s",
-                     czi_compression_t_string(tile_desc->compression) );
-        (*uncompressed_data_size) = 0;
-        return NULL;
-      }
-
+      uncompressor = (&_openslide_uncompressor_jpeg);
       break;
 
     case JPEGXR:
 #ifdef HAVE_LIBJXR
-
+      uncompressor = (&_openslide_uncompressor_jxr);
       break;
 #endif //HAVE_LIBJXR
 
@@ -2746,6 +2800,15 @@ uint8_t * _openslide_czi_uncompress_tile(
       (*uncompressed_data_size) = 0;
       return NULL;
   }
+
+  uncompressed_data = _openslide_czi_uncompress(
+                            uncompressor,
+                            data, data_size,
+                            tile_desc->size_x / tile_desc->subsampling_x,
+                            tile_desc->size_y / tile_desc->subsampling_y,
+                            tile_desc->pixel_type,
+                            uncompressed_data_size,
+                            err);
 
   return uncompressed_data;
 }
@@ -2831,6 +2894,18 @@ uint8_t * _openslide_czi_load_tile(
     tile->data_buf = NULL;
     return NULL;
   }
+
+#ifdef ZEISS_WRITE_TILE_DATA
+  char * filename = g_strdup_printf( "tile_%d_%ld", level, tile->uid);
+  FILE * outstream = _openslide_fopen( filename, "w+", err );
+  if (outstream) {
+    uint64_t len;
+    len = fwrite( tile->data_buf, 1, tile->data_size, outstream );
+    if( len != (uint64_t)tile->data_size ) {
+      g_debug( "Unable to write tile %ld data to file %s", tile->uid, filename );
+    }
+  }
+#endif
 
   if( buffer_size )  (*buffer_size) = tile->data_size;
 
@@ -3998,12 +4073,12 @@ bool zeiss_tileread(
 
     // Uncompress tile data if needed
     if (tile_desc->compression != UNCOMPRESSED) {
-
       internal_tile_data = _openslide_czi_uncompress_tile( tile_desc,
                                                            tile_data,
                                                            data_size,
                                                            &internal_data_size,
                                                            err );
+
       if (!internal_tile_data)
         return false;
 
