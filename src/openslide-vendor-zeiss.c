@@ -203,7 +203,7 @@ static bool _openslide_czi_is_multi_zslice( _openslide_czi * czi );
 static bool _openslide_czi_is_multi_channel( _openslide_czi * czi );
 static bool _openslide_czi_has_data_uncompressed( _openslide_czi * czi ) G_GNUC_UNUSED;
 static bool _openslide_czi_has_data_jpg( _openslide_czi * czi ) G_GNUC_UNUSED;
-static bool _openslide_czi_has_data_jpgxr( _openslide_czi * czi );
+static bool _openslide_czi_has_data_jpgxr( _openslide_czi * czi ) G_GNUC_UNUSED;
 static bool _openslide_czi_has_data_lzw( _openslide_czi * czi );
 static bool _openslide_czi_has_data_cameraspec( _openslide_czi * czi );
 static bool _openslide_czi_has_data_systemspec( _openslide_czi * czi );

@@ -147,7 +147,6 @@ bool _openslide_jxr_decode_buffer(const void *data, uint32_t datalen,
 
   // Attach stream to decoder/encoder
   Call(pDecoder->Initialize(pDecoder, pStream));
-  //pDecoder->fStreamOwner = !0;
   Call(pEncoder->Initialize(pEncoder, pEncodeStream, NULL, 0));
 
   // Set decoder options
@@ -156,7 +155,6 @@ bool _openslide_jxr_decode_buffer(const void *data, uint32_t datalen,
   pDecoder->WMP.wmiI.cfColorFormat = PI.cfColorFormat;
   pDecoder->WMP.wmiI.bdBitDepth = PI.bdBitDepth;
   pDecoder->WMP.wmiI.cBitsPerUnit = PI.cbitUnit;
-//  pDecoder->WMP.wmiI.bRGB = 1; //RGB
   pDecoder->WMP.wmiI.cROIWidth = w;
   pDecoder->WMP.wmiI.cROIHeight = h;
   pDecoder->WMP.wmiSCP.uAlphaMode = 0;
@@ -174,10 +172,6 @@ bool _openslide_jxr_decode_buffer(const void *data, uint32_t datalen,
 
   Call(pEncoder->SetPixelFormat(pEncoder, *PI.pGUIDPixFmt ));
   Call(pEncoder->SetSize(pEncoder, region.Width, region.Height));
-  // Float rx, ry;
-  // pDecoder->GetResolution(pDecoder, &rx, &ry);
-  //pEncoder->SetResolution(pEncoder, rx, ry);
-
 
   // Convert data from original image
   Call(pEncoder->WriteSource(pEncoder, pConverter, &region));
