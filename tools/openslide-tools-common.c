@@ -86,6 +86,7 @@ void _openslide_tools_parse_commandline(const struct openslide_tools_usage_info 
 }
 
 void _openslide_tools_usage(const struct openslide_tools_usage_info *info) {
+#ifdef HAVE_G_OPTION_CONTEXT_GET_HELP
   GOptionContext *octx = make_option_context(info);
 
   gchar *help = g_option_context_get_help(octx, TRUE, NULL);
@@ -93,5 +94,6 @@ void _openslide_tools_usage(const struct openslide_tools_usage_info *info) {
   g_free(help);
 
   g_option_context_free(octx);
+#endif
   exit(2);
 }

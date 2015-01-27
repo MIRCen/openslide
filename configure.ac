@@ -120,14 +120,26 @@ AC_COMPILE_IFELSE([AC_LANG_SOURCE([
 ])
 CFLAGS="$old_CFLAGS"
 
-PKG_CHECK_MODULES(GLIB2, [glib-2.0 >= 2.16, gthread-2.0, gio-2.0, gobject-2.0])
+## HACK: glib 2.12
+PKG_CHECK_MODULES(GLIB2, [ glib-2.0 >= 2.12, gthread-2.0 >= 2.12 ])
+old_LIBS="$LIBS"
+LIBS="$GLIB2_LIBS $LIBS"
+AC_CHECK_FUNCS([g_option_context_get_help])
+LIBS="$old_LIBS"
+##
+
 PKG_CHECK_MODULES(CAIRO, [cairo >= 1.2])
 PKG_CHECK_MODULES(LIBPNG, [libpng > 1.2])
-PKG_CHECK_MODULES(GDKPIXBUF, [gdk-pixbuf-2.0 >= 2.14])
+PKG_CHECK_MODULES(GDKPIXBUF, [gdk-pixbuf-2.0 >= 2.10])
 PKG_CHECK_MODULES(LIBXML2, [libxml-2.0])
-PKG_CHECK_MODULES(SQLITE3, [sqlite3 >= 3.6.20])
 
 # optional
+PKG_CHECK_MODULES(SQLITE3, [sqlite3 >= 3.6.20], [
+  AC_DEFINE([HAVE_SQLITE3], [1], [Define to 1 if you have SQLITE3 >= 3.6.20])
+], [:] )
+
+AM_CONDITIONAL([HAVE_SQLITE3], [test w$HAVE_SQLITE3 = x1])
+
 PKG_CHECK_MODULES(VALGRIND, [valgrind], [
   AC_DEFINE([HAVE_VALGRIND], [1], [Define to 1 if you have the Valgrind headers.])
 ], [:])
@@ -207,7 +219,7 @@ AC_SUBST([CFLAG_MS_FORMAT])
 
 # The min/max glib version is actually 2.16, but glib doesn't have special
 # handling for API changes that old
-AC_SUBST(AM_CFLAGS, ['-Wall -Wextra -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Wnested-externs $(CFLAG_MS_FORMAT) $(CFLAG_VISIBILITY) -DG_DISABLE_SINGLE_INCLUDES -DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_26 -DGLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_MIN_REQUIRED -fno-common'])
+AC_SUBST(AM_CFLAGS, ['-Wall -Wextra -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Wnested-externs $(CFLAG_MS_FORMAT) $(CFLAG_VISIBILITY) -DG_DISABLE_SINGLE_INCLUDES -DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_12 -DGLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_MIN_REQUIRED -fno-common'])
 
 AC_SUBST(FEATURE_FLAGS)
 

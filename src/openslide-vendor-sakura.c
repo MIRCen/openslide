@@ -35,6 +35,8 @@
 #include "openslide-decode-sqlite.h"
 #include "openslide-hash.h"
 
+#if HAVE_GLIB2_16 && HAVE_SQLITE3
+
 #include <glib.h>
 #include <glib-object.h>
 #include <gio/gio.h>
@@ -1023,6 +1025,21 @@ FAIL:
   g_free(unique_table_name);
   return success;
 }
+
+#else
+
+static bool sakura_detect(const char *filename,
+                          struct _openslide_tifflike *tl, GError **err) {
+	return false;
+}
+
+static bool sakura_open(openslide_t *osr, const char *filename,
+                        struct _openslide_tifflike *tl G_GNUC_UNUSED,
+                        struct _openslide_hash *quickhash1, GError **err) {
+	return false;
+}
+
+#endif
 
 const struct _openslide_format _openslide_format_sakura = {
   .name = "sakura",

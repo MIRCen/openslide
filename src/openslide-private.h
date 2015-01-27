@@ -26,6 +26,7 @@
 
 #include "openslide.h"
 #include "openslide-hash.h"
+#include "openslide-compatibility.h"
 
 #include <glib.h>
 #include <stdio.h>
@@ -171,7 +172,6 @@ bool _openslide_clip_tile(uint32_t *tiledata,
                           int64_t tile_w, int64_t tile_h,
                           int64_t clip_w, int64_t clip_h,
                           GError **err);
-
 
 // Grid helpers
 struct _openslide_grid;

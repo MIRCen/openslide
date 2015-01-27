@@ -24,7 +24,6 @@ src_libopenslide_la_SOURCES = \
 	src/openslide-decode-jpeg.c \
 	src/openslide-decode-jxr.c \
 	src/openslide-decode-png.c \
-	src/openslide-decode-sqlite.c \
 	src/openslide-decode-tiff.c \
 	src/openslide-decode-tifflike.c \
 	src/openslide-decode-xml.c \
@@ -44,6 +43,15 @@ src_libopenslide_la_SOURCES = \
 	src/openslide-vendor-trestle.c \
 	src/openslide-vendor-ventana.c \
 	src/openslide-vendor-zeiss.c
+	
+if HAVE_SQLITE3
+src_libopenslide_la_SOURCES += \
+	src/openslide-decode-sqlite.c
+endif
+
+# Update sources for compatibility
+src_libopenslide_la_SOURCES += \
+	src/openslide-compatibility.c
 
 EXTRA_PROGRAMS = src/make-tables
 CLEANFILES = src/make-tables
@@ -77,6 +85,7 @@ pkginclude_HEADERS = \
 
 noinst_HEADERS = \
 	src/openslide-cairo.h \
+	src/openslide-compatibility.h \
 	src/openslide-decode-gdkpixbuf.h \
 	src/openslide-decode-jp2k.h \
 	src/openslide-decode-jpeg.h \
