@@ -142,6 +142,11 @@ g_hash_table_get_values        (GHashTable *hash_table);
 // Previous patches to 1.6
 #if CAIRO_VERSION < 10600
 
+cairo_status_t _cairo_error (cairo_status_t status);
+
+cairo_public int
+_cairo_format_bits_per_pixel (cairo_format_t format);
+
 cairo_public int
 cairo_format_stride_for_width (cairo_format_t	format,
 			       int		width);
