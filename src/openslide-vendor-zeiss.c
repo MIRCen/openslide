@@ -2613,17 +2613,6 @@ GList * _openslide_czi_get_level_tiles(
   return extern_list;
 }
 
-// bool _openslide_pixel_convert_bgr24_to_argb32( uint8_t * src,
-//                                                uint8_t * dest ) {
-
-//   dest[0] = src[0];
-//   dest[1] = src[1];
-//   dest[2] = src[2];
-//   dest[3] = (uint8_t)255;
-
-//   return true;
-// }
-
 void _openslide_czi_pixel_copy( uint8_t * src,
                                 uint8_t * dest,
                                 int8_t src_pixel_type_size,
