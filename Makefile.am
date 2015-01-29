@@ -45,13 +45,11 @@ src_libopenslide_la_SOURCES = \
 	src/openslide-vendor-zeiss.c
 	
 if HAVE_SQLITE3
-src_libopenslide_la_SOURCES += \
-	src/openslide-decode-sqlite.c
+src_libopenslide_la_SOURCES += src/openslide-decode-sqlite.c
 endif
 
 # Update sources for compatibility
-src_libopenslide_la_SOURCES += \
-	src/openslide-compatibility.c
+src_libopenslide_la_SOURCES += src/openslide-compatibility.c
 
 EXTRA_PROGRAMS = src/make-tables
 CLEANFILES = src/make-tables
@@ -76,7 +74,7 @@ src_libopenslide_la_CPPFLAGS = -pedantic -D_OPENSLIDE_BUILDING_DLL \
 	$(GDKPIXBUF_CFLAGS) $(ZLIB_CFLAGS) $(LIBJXR_CFLAGS) -DG_LOG_DOMAIN=\"Openslide\" \
 	-I$(top_srcdir)/src
 
-src_libopenslide_la_LDFLAGS = -version-info 4:0:4 -no-undefined
+src_libopenslide_la_LDFLAGS = $(SQLITE3_LIBS) -version-info 4:0:4 -no-undefined
 
 
 pkginclude_HEADERS = \
@@ -153,7 +151,7 @@ bin_PROGRAMS = tools/openslide-show-properties
 man_MANS = tools/openslide-show-properties.1
 tools_openslide_show_properties_SOURCES = tools/openslide-tools-common.c tools/openslide-show-properties.c
 tools_openslide_show_properties_CPPFLAGS = -I$(top_srcdir)/src $(GLIB2_CFLAGS) $(LIBJXR_CFLAGS)
-tools_openslide_show_properties_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(LIBJXR_LIBS)
+tools_openslide_show_properties_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(SQLITE3_LIBS) $(LIBJXR_LIBS)
 
 # quickhash1sum
 bin_PROGRAMS += tools/openslide-quickhash1sum
@@ -167,7 +165,7 @@ bin_PROGRAMS += tools/openslide-write-png
 man_MANS += tools/openslide-write-png.1
 tools_openslide_write_png_SOURCES = tools/openslide-tools-common.c tools/openslide-write-png.c
 tools_openslide_write_png_CPPFLAGS = -I$(top_srcdir)/src $(LIBPNG_CFLAGS) $(GLIB2_CFLAGS) $(LIBJXR_CFLAGS)
-tools_openslide_write_png_LDADD = src/libopenslide.la $(LIBPNG_LIBS) $(GLIB2_LIBS) $(LIBJXR_LIBS)
+tools_openslide_write_png_LDADD = src/libopenslide.la $(LIBPNG_LIBS) $(GLIB2_LIBS) $(SQLITE3_LIBS) $(LIBJXR_LIBS)
 
 # man pages
 EXTRA_DIST += $(man_MANS:=.in)

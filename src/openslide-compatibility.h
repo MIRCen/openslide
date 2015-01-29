@@ -29,7 +29,6 @@
  * Glib2 compatibility
  */
 
-#include <glibconfig.h>
 #include <glib.h>
 
 #define OPENSLIDE_VERSION_CONCAT(VER_MAJOR, VER_MINOR, VER_MICRO) VER_MAJOR * 10000 + VER_MINOR * 100 + VER_MICRO
