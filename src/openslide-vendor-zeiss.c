@@ -564,14 +564,14 @@ static struct _openslide_czi_tile_descriptor    * czi_new_tile_descriptor( struc
 
 //--- free -------------------------------------------------------------------
 static void czi_free(              struct _czi              * ptr );
-static void czi_free_source(       struct _czi_source       * ptr, gpointer	user_data );
-static void czi_free_file_header(  struct _czi_file_header  * ptr, gpointer	user_data );
-static void czi_free_level(        struct _czi_level        * ptr, gpointer	user_data );
-static void czi_free_metadata(     struct _czi_metadata     * ptr, gpointer	user_data );
-static void czi_free_attachment(   struct _czi_attachment   * ptr, gpointer	user_data ) G_GNUC_UNUSED;
+static void czi_free_source(       struct _czi_source       * ptr, gpointer user_data );
+static void czi_free_file_header(  struct _czi_file_header  * ptr, gpointer user_data );
+static void czi_free_level(        struct _czi_level        * ptr, gpointer user_data );
+static void czi_free_metadata(     struct _czi_metadata     * ptr, gpointer user_data );
+static void czi_free_attachment(   struct _czi_attachment   * ptr, gpointer user_data ) G_GNUC_UNUSED;
 static void czi_free_tile(         struct _czi_tile         * ptr );
 static void czi_free_dimension(    struct _czi_dimension    * ptr );
-static void czi_free_roi(          struct _czi_roi          * ptr, gpointer	user_data );
+static void czi_free_roi(          struct _czi_roi          * ptr, gpointer user_data );
 static void czi_free_S32(          int32_t                  * ptr );
 static void czi_free_S64(          int64_t                  * ptr );
 static void czi_free_tile_descriptor( struct _openslide_czi_tile_descriptor * ptr );
@@ -1505,40 +1505,40 @@ void czi_free( struct _czi * ptr )
 {
   // g_debug( "czi_free" );
   if( ptr ) {
-    if( ptr->sources )      {
-			g_ptr_array_foreach( ptr->sources, 
-													 (GFunc) czi_free_source,
-													 NULL );
-			g_ptr_array_free( ptr->sources, true );
-		}
+    if( ptr->sources ) {
+      g_ptr_array_foreach( ptr->sources, 
+                           (GFunc) czi_free_source,
+                           NULL );
+      g_ptr_array_free( ptr->sources, true );
+    }
 
     if( ptr->file_headers ) {
-			g_ptr_array_foreach( ptr->file_headers,
-													 (GFunc) czi_free_file_header,
-													 NULL );
-			g_ptr_array_free( ptr->file_headers, true );
-		}
+      g_ptr_array_foreach( ptr->file_headers,
+                           (GFunc) czi_free_file_header,
+                           NULL );
+      g_ptr_array_free( ptr->file_headers, true );
+    }
 
     if( ptr->levels ) {
-			g_ptr_array_foreach( ptr->levels,
-													 (GFunc) czi_free_level,
-													 NULL );
-			g_ptr_array_free( ptr->levels, true );
-		}
+      g_ptr_array_foreach( ptr->levels,
+                           (GFunc) czi_free_level,
+                           NULL );
+      g_ptr_array_free( ptr->levels, true );
+    }
 
-    if( ptr->metadata )	{
-			g_ptr_array_foreach( ptr->metadata,
-													 (GFunc) czi_free_metadata,
-													 NULL );
-			g_ptr_array_free( ptr->metadata, true );
-		}
+    if( ptr->metadata ) {
+      g_ptr_array_foreach( ptr->metadata,
+                           (GFunc) czi_free_metadata,
+                           NULL );
+      g_ptr_array_free( ptr->metadata, true );
+    }
 
-    if( ptr->rois )	{
-			g_ptr_array_foreach( ptr->rois,
-													 (GFunc) czi_free_roi,
-													 NULL );
-			g_ptr_array_free( ptr->rois, true );
-		}
+    if( ptr->rois ) {
+      g_ptr_array_foreach( ptr->rois,
+                           (GFunc) czi_free_roi,
+                           NULL );
+      g_ptr_array_free( ptr->rois, true );
+    }
 
     if( ptr->attachments )  g_hash_table_destroy( ptr->attachments );
     if( ptr->grids )        g_hash_table_destroy( ptr->grids );
@@ -1547,7 +1547,7 @@ void czi_free( struct _czi * ptr )
 }
 
 void czi_free_source( struct _czi_source * ptr, 
-											gpointer user_data G_GNUC_UNUSED )
+                      gpointer user_data G_GNUC_UNUSED )
 {
   // g_debug( "czi_free_source" );
   if( ptr ) {
@@ -1558,14 +1558,14 @@ void czi_free_source( struct _czi_source * ptr,
 }
 
 void czi_free_file_header( struct _czi_file_header * ptr, 
-													 gpointer user_data G_GNUC_UNUSED )
+                           gpointer user_data G_GNUC_UNUSED )
 {
   // g_debug( "czi_free_file_header" );
   if( ptr ) g_slice_free( struct _czi_file_header, ptr );
 }
 
 void czi_free_level( struct _czi_level * ptr,
-										 gpointer user_data G_GNUC_UNUSED )
+                     gpointer user_data G_GNUC_UNUSED )
 {
   // g_debug( "czi_free_level" );
   if( ptr ) {
@@ -1577,7 +1577,7 @@ void czi_free_level( struct _czi_level * ptr,
 }
 
 void czi_free_roi( struct _czi_roi * ptr,
-  								 gpointer user_data G_GNUC_UNUSED )
+                   gpointer user_data G_GNUC_UNUSED )
 {
   // g_debug( "czi_free_roi" );
   if( ptr ) {
@@ -1587,14 +1587,14 @@ void czi_free_roi( struct _czi_roi * ptr,
 }
 
 void czi_free_metadata( struct _czi_metadata * ptr,
-												gpointer user_data G_GNUC_UNUSED )
+                        gpointer user_data G_GNUC_UNUSED )
 {
   // g_debug( "czi_free_metadata" );
   if( ptr ) g_slice_free( struct _czi_metadata, ptr );
 }
 
 void czi_free_attachment( struct _czi_attachment * ptr,
-          							  gpointer user_data G_GNUC_UNUSED )
+                          gpointer user_data G_GNUC_UNUSED )
 {
   // g_debug(  " czi_free_attachment");
   if( ptr ) g_slice_free( struct _czi_attachment, ptr );

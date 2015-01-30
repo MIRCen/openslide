@@ -31,10 +31,11 @@
 
 gboolean
 g_int64_equal (gconstpointer v1,
-	       gconstpointer v2)
+               gconstpointer v2)
 {
   return *((const gint64*) v1) == *((const gint64*) v2);
 }
+
 guint
 g_int64_hash (gconstpointer v)
 {
@@ -196,9 +197,9 @@ static const uint32_t SHA256_K[64] = {
 static void transform(uint32_t state[8], const uint32_t data[16])
 {
   uint32_t W[16] = {0,0,0,0,
-										0,0,0,0,
-										0,0,0,0,
-										0,0,0,0};
+                    0,0,0,0,
+                    0,0,0,0,
+                    0,0,0,0};
   uint32_t T[8];
 
   // Copy state[] to working vars.
@@ -332,22 +333,22 @@ void g_checksum_free(GChecksum *ctx)
 // Previous patches to 2.14
 #if GLIB_VERSION < 21400
 void g_list_prepend_hash_key( gpointer key,
-									            gpointer value,
-									            GList ** user_list );
+                              gpointer value,
+                              GList ** user_list );
 
 void g_list_prepend_hash_value( gpointer key,
-									            	gpointer value,
-									            	GList ** user_list );
+                                gpointer value,
+                                GList ** user_list );
 
 void g_list_prepend_hash_key( gpointer key,
-									            gpointer value G_GNUC_UNUSED,
-									            GList ** user_list ) {
+                              gpointer value G_GNUC_UNUSED,
+                              GList ** user_list ) {
   *user_list = g_list_prepend(*user_list, key );
 }
 
 void g_list_prepend_hash_value( gpointer key G_GNUC_UNUSED,
-									            	gpointer value,
-									            	GList ** user_list ) {
+                                gpointer value,
+                                GList ** user_list ) {
   *user_list = g_list_prepend(*user_list, value );
 }
 
@@ -372,7 +373,7 @@ g_hash_table_get_values (GHashTable *hash_table)
 
   g_return_val_if_fail (hash_table != NULL, NULL);
 
-	g_hash_table_foreach ( hash_table, (GHFunc)g_list_prepend_hash_value, &retval );
+  g_hash_table_foreach ( hash_table, (GHFunc)g_list_prepend_hash_value, &retval );
 
   return retval;
 }
@@ -398,7 +399,7 @@ g_hash_table_get_keys (GHashTable *hash_table)
 
   g_return_val_if_fail (hash_table != NULL, NULL);
 
-	g_hash_table_foreach ( hash_table, (GHFunc)g_list_prepend_hash_key, &retval );
+  g_hash_table_foreach ( hash_table, (GHFunc)g_list_prepend_hash_key, &retval );
 
   return retval;
 }
@@ -508,17 +509,17 @@ _cairo_format_bits_per_pixel (cairo_format_t format)
     switch (format) {
     case CAIRO_FORMAT_ARGB32:
     case CAIRO_FORMAT_RGB24:
-	return 32;
+      return 32;
     case CAIRO_FORMAT_RGB16_565:
-	return 16;
+      return 16;
     case CAIRO_FORMAT_A8:
-	return 8;
+      return 8;
     case CAIRO_FORMAT_A1:
-	return 1;
+      return 1;
     case CAIRO_FORMAT_INVALID:
     default:
-	ASSERT_NOT_REACHED;
-	return 0;
+      ASSERT_NOT_REACHED;
+      return 0;
     }
 }
 
@@ -550,14 +551,14 @@ _cairo_format_bits_per_pixel (cairo_format_t format)
  * Since: 1.6
  **/
     int
-cairo_format_stride_for_width (cairo_format_t	format,
-			       int		width)
+cairo_format_stride_for_width (cairo_format_t format,
+                               int            width)
 {
     int bpp;
 
     bpp = _cairo_format_bits_per_pixel (format);
     if ((unsigned) (width) >= (INT32_MAX - 7) / (unsigned) (bpp))
-	return -1;
+      return -1;
 
     return CAIRO_STRIDE_FOR_WIDTH_BPP (width, bpp);
 }

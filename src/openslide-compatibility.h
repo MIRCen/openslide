@@ -40,7 +40,7 @@
 
 gboolean
 g_int64_equal (gconstpointer v1,
-	       			 gconstpointer v2);
+               gconstpointer v2);
 
 guint
 g_int64_hash (gconstpointer v);
@@ -142,8 +142,8 @@ cairo_public int
 _cairo_format_bits_per_pixel (cairo_format_t format);
 
 cairo_public int
-cairo_format_stride_for_width (cairo_format_t	format,
-			       int		width);
+cairo_format_stride_for_width (cairo_format_t format,
+                               int            width);
 
 #endif
 
@@ -161,7 +161,7 @@ cairo_format_stride_for_width (cairo_format_t	format,
 #include <libxml/tree.h>
 
 xmlNodePtr XMLCALL
-            xmlFirstElementChild        (xmlNodePtr parent);
+            xmlFirstElementChild (xmlNodePtr parent);
 
 #endif
 

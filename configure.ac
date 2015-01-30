@@ -138,7 +138,7 @@ PKG_CHECK_MODULES(SQLITE3, [sqlite3 >= 3.6.20], [
   AC_DEFINE([HAVE_SQLITE3], [1], [Define to 1 if you have SQLITE3 >= 3.6.20])
 ], [:] )
 
-AM_CONDITIONAL([HAVE_SQLITE3], [test x$HAVE_SQLITE3 = x])
+AM_CONDITIONAL([HAVE_SQLITE3], [test x$HAVE_SQLITE3 != x])
 
 PKG_CHECK_MODULES(VALGRIND, [valgrind], [
   AC_DEFINE([HAVE_VALGRIND], [1], [Define to 1 if you have the Valgrind headers.])
