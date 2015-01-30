@@ -40,15 +40,10 @@
 
 gboolean
 g_int64_equal (gconstpointer v1,
-	       gconstpointer v2);
+	       			 gconstpointer v2);
 
 guint
 g_int64_hash (gconstpointer v);
-
-void       g_ptr_array_set_free_func      (GPtrArray        *array,
-                                           GDestroyNotify    element_free_func);
-					   
-GPtrArray* g_ptr_array_new_with_free_func (GDestroyNotify    element_free_func);
 
 // Previous patches to 2.16
 #if GLIB_VERSION < 21600

@@ -29,48 +29,6 @@
 // Previous patches to 2.22
 #if GLIB_VERSION < 22200
 
-typedef struct _GRealArray  GRealArray;
-
-/**
- * GArray:
- * @data: a pointer to the element data. The data may be moved as
- *     elements are added to the #GArray.
- * @len: the number of elements in the #GArray not including the
- *     possible terminating zero element.
- *
- * Contains the public fields of a GArray.
- */
-struct _GRealArray
-{
-  guint8 *data;
-  guint   len;
-  guint   alloc;
-  guint   elt_size;
-  guint   zero_terminated : 1;
-  guint   clear : 1;
-  gint    ref_count;
-  GDestroyNotify clear_func;
-};
-
-typedef struct _GRealPtrArray  GRealPtrArray;
-
-/**
- * GPtrArray:
- * @pdata: points to the array of pointers, which may be moved when the
- *     array grows
- * @len: number of pointers in the array
- *
- * Contains the public fields of a pointer array.
- */
-struct _GRealPtrArray
-{
-  gpointer       *pdata;
-  guint           len;
-  guint           alloc;
-  gint            ref_count;
-  GDestroyNotify  element_free_func;
-};
-
 gboolean
 g_int64_equal (gconstpointer v1,
 	       gconstpointer v2)
@@ -83,72 +41,10 @@ g_int64_hash (gconstpointer v)
    return (guint) *(const gint64*) v;
 }
 
-/**
- * g_ptr_array_set_free_func:
- * @array: A #GPtrArray
- * @element_free_func: (allow-none): A function to free elements with
- *     destroy @array or %NULL
- *
- * Sets a function for freeing each element when @array is destroyed
- * either via g_ptr_array_unref(), when g_ptr_array_free() is called
- * with @free_segment set to %TRUE or when removing elements.
- *
- * Since: 2.22
- */
-void
-g_ptr_array_set_free_func (GPtrArray      *array,
-                           GDestroyNotify  element_free_func)
-{
-  GRealPtrArray *rarray = (GRealPtrArray *)array;
-
-  g_return_if_fail (array);
-
-  rarray->element_free_func = element_free_func;
-}
-
-/**
- * g_ptr_array_new_with_free_func:
- * @element_free_func: (allow-none): A function to free elements with
- *     destroy @array or %NULL
- *
- * Creates a new #GPtrArray with a reference count of 1 and use
- * @element_free_func for freeing each element when the array is destroyed
- * either via g_ptr_array_unref(), when g_ptr_array_free() is called with
- * @free_segment set to %TRUE or when removing elements.
- *
- * Returns: A new #GPtrArray
- *
- * Since: 2.22
- */
-GPtrArray*
-g_ptr_array_new_with_free_func (GDestroyNotify element_free_func)
-{
-  GPtrArray *array;
-
-  array = g_ptr_array_new ();
-  g_ptr_array_set_free_func (array, element_free_func);
-
-  return array;
-}
-
 // Previous patches to 2.16
 #if GLIB_VERSION < 21600
 
 #include <string.h>
-
-/**
- * g_warn_if_fail:
- * @expr: the expression to check
- *
- * Logs a warning if the expression is not true.
- *
- * Since: 2.16
- */
-#define g_warn_if_fail(expr) \
-  do { \
-    if G_LIKELY (expr) ; \
-    else g_warn_message (G_LOG_DOMAIN, __FILE__, __LINE__, G_STRFUNC, #expr); \
-  } while (0)
 
 G_GNUC_PRINTF(2, 0)
 static void
@@ -249,9 +145,6 @@ g_warn_message (const char     *domain,
   g_free (s);
 }
 
-//#define Checksum SHA256_CTX
-//#define CHECKSUM_SHA256
-
 // At least on x86, GCC is able to optimize this to a rotate instruction.
 #define rotr_32(num, amount) ((num) >> (amount) | (num) << (32 - (amount)))
 
@@ -302,7 +195,10 @@ static const uint32_t SHA256_K[64] = {
 
 static void transform(uint32_t state[8], const uint32_t data[16])
 {
-  uint32_t W[16];
+  uint32_t W[16] = {0,0,0,0,
+										0,0,0,0,
+										0,0,0,0,
+										0,0,0,0};
   uint32_t T[8];
 
   // Copy state[] to working vars.
@@ -435,33 +331,25 @@ void g_checksum_free(GChecksum *ctx)
 
 // Previous patches to 2.14
 #if GLIB_VERSION < 21400
+void g_list_prepend_hash_key( gpointer key,
+									            gpointer value,
+									            GList ** user_list );
 
-struct _GHashTable
-{
-  gint             size;
-  gint             mod;
-  guint            mask;
-  gint             nnodes;
-  gint             noccupied;  /* nnodes + tombstones */
+void g_list_prepend_hash_value( gpointer key,
+									            	gpointer value,
+									            	GList ** user_list );
 
-  gpointer        *keys;
-  guint           *hashes;
-  gpointer        *values;
+void g_list_prepend_hash_key( gpointer key,
+									            gpointer value G_GNUC_UNUSED,
+									            GList ** user_list ) {
+  *user_list = g_list_prepend(*user_list, key );
+}
 
-  GHashFunc        hash_func;
-  GEqualFunc       key_equal_func;
-  gint             ref_count;
-#ifndef G_DISABLE_ASSERT
-  /*
-   * Tracks the structure of the hash table, not its contents: is only
-   * incremented when a node is added or removed (is not incremented
-   * when the key or data of a node is modified).
-   */
-  int              version;
-#endif
-  GDestroyNotify   key_destroy_func;
-  GDestroyNotify   value_destroy_func;
-};
+void g_list_prepend_hash_value( gpointer key G_GNUC_UNUSED,
+									            	gpointer value,
+									            	GList ** user_list ) {
+  *user_list = g_list_prepend(*user_list, value );
+}
 
 /**
  * g_hash_table_get_values:
@@ -480,17 +368,11 @@ struct _GHashTable
 GList *
 g_hash_table_get_values (GHashTable *hash_table)
 {
-  gint i;
-  GList *retval;
+  GList *retval = NULL;
 
   g_return_val_if_fail (hash_table != NULL, NULL);
 
-  retval = NULL;
-  for (i = 0; i < hash_table->size; i++)
-    {
-      if (HASH_IS_REAL (hash_table->hashes[i]))
-        retval = g_list_prepend (retval, hash_table->values[i]);
-    }
+	g_hash_table_foreach ( hash_table, (GHFunc)g_list_prepend_hash_value, &retval );
 
   return retval;
 }
@@ -512,17 +394,11 @@ g_hash_table_get_values (GHashTable *hash_table)
 GList *
 g_hash_table_get_keys (GHashTable *hash_table)
 {
-  gint i;
-  GList *retval;
+  GList *retval = NULL;
 
   g_return_val_if_fail (hash_table != NULL, NULL);
 
-  retval = NULL;
-  for (i = 0; i < hash_table->size; i++)
-    {
-      if (HASH_IS_REAL (hash_table->hashes[i]))
-        retval = g_list_prepend (retval, hash_table->keys[i]);
-    }
+	g_hash_table_foreach ( hash_table, (GHFunc)g_list_prepend_hash_key, &retval );
 
   return retval;
 }
@@ -678,11 +554,6 @@ cairo_format_stride_for_width (cairo_format_t	format,
 			       int		width)
 {
     int bpp;
-
-    if (! CAIRO_FORMAT_VALID (format)) {
-	_cairo_error_throw (CAIRO_STATUS_INVALID_FORMAT);
-	return -1;
-    }
 
     bpp = _cairo_format_bits_per_pixel (format);
     if ((unsigned) (width) >= (INT32_MAX - 7) / (unsigned) (bpp))
