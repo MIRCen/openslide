@@ -219,7 +219,7 @@ AC_SUBST([CFLAG_MS_FORMAT])
 
 # The min/max glib version is actually 2.16, but glib doesn't have special
 # handling for API changes that old
-AC_SUBST(AM_CFLAGS, ['-Wall -Wextra -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Wnested-externs $(CFLAG_MS_FORMAT) $(CFLAG_VISIBILITY) -DG_DISABLE_SINGLE_INCLUDES -DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_12 -DGLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_MIN_REQUIRED -fno-common'])
+AC_SUBST(AM_CFLAGS, ['-Wall -Wextra -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Wnested-externs $(CFLAG_MS_FORMAT) $(CFLAG_VISIBILITY) -DG_DISABLE_SINGLE_INCLUDES  -DGLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_MIN_REQUIRED -fno-common'])
 
 AC_SUBST(FEATURE_FLAGS)
 

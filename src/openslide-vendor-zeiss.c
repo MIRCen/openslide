@@ -540,9 +540,17 @@ static bool read_items(
   GError  ** err       // Error handling
 );
 
+// Compare two guid to check that they are equal or not.
+// Return true if all bytes are equals and false otherwise.
+static bool compare_guid(
+    uint8_t * guid1, // First GUID to compare
+    uint8_t * guid2  // Second GUID to compare
+);
+
 //--- read _czi --------------------------------------------------------------
 static bool czi_find_sources( const char * filename, struct _czi * czi, GError ** err );
 static bool czi_decode_one_stream( struct _czi_source * source, struct _czi * czi, GError ** err );
+static bool czi_add_file_header( struct _czi * czi, struct _czi_file_header * header, GError ** err );
 static bool czi_add_tile( struct _czi * czi, struct _czi_tile * tile, int32_t ss_x, int32_t ss_y, GError ** err );
 static bool czi_update_bool_dimension( struct _czi * czi, char key, int32_t size, GError ** err );
 static bool czi_update_bool_compression( struct _czi * czi, enum czi_compression_t compression, GError ** err );
@@ -703,6 +711,15 @@ bool read_items(
   return true;
 }
 
+bool compare_guid(uint8_t * guid1, uint8_t * guid2) {
+    for( int i=0; i<16; ++i ) {
+        if (guid1[i] != guid2[i])
+            return false;
+    }
+    
+    return true;
+}
+
 bool _openslide_get_resolution( openslide_t * osr, double * mppx, double * mppy, GError **err ) {
   *mppx = _openslide_parse_double( (const char*)g_hash_table_lookup( osr->properties, OPENSLIDE_PROPERTY_NAME_MPP_X ));
   if (!mppx) {
@@ -803,36 +820,52 @@ bool czi_decode_one_stream(
   if( !czi_is_zisraw( source->stream, err ) )
     return false;
 
-  int64_t position = ftello( source->stream );
-  int64_t position_max = source->begin + source->size;
-  bool check_position = ( source->size > 0 );
-  struct _czi_segment_header * header = (struct _czi_segment_header*) g_slice_alloc0( sizeof(struct _czi_segment_header) );
-  while( !feof( source->stream ) && (!check_position || position < position_max ) )
-  {
-    if( !czi_read_next_segment_header( source, header, err ) ) {
-      // we assume it is because there are no segments left
-      g_slice_free( struct _czi_segment_header, header );
-      g_clear_error( err );
-      err = NULL;
-      break;
-    }
-
-    // Treat different cases
-    if( !strcmp( header->id, CZI_FILE ) )
-    {
-      struct _czi_file_header * new_file_header = czi_new_file_header( czi, err );
-      if( !new_file_header )
-        return false;
-      g_ptr_array_add( czi->file_headers, new_file_header );
-      if( !czi_read_file_header( source, new_file_header, err ) )
-        return false;
-    }
-    else if( !strcmp( header->id, CZI_DIRECTORY ) )
-    {
-      if( !czi_parse_directory( source, czi, err ) )
+  // allocate segment header
+  struct _czi_segment_header * header = (struct _czi_segment_header*) 
+                                        g_slice_alloc0( 
+                                            sizeof(struct _czi_segment_header)
+                                        );
+  // read segment header
+  if (!czi_read_next_segment_header(source, header, err)) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to read segment header at the position %ld: %s",
+                 source->begin, g_strerror(errno) );
+    g_slice_free( struct _czi_segment_header, header );
+    return false;
+  }
+  
+  if (!strcmp( header->id, CZI_FILE )) {
+      
+    // read file header
+    struct _czi_file_header * file_header = czi_new_file_header(czi, err);
+    
+    if (!czi_read_file_header(source, file_header, err)) {
+        g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                    "Failed to read file header at the position %ld: %s",
+                    source->begin, g_strerror(errno) );
+        g_slice_free( struct _czi_segment_header, header );
+        czi_free_file_header(file_header);
         return false;
     }
-    else if( !strcmp( header->id, CZI_METADATA ) )
+    
+    if (!czi_add_file_header(czi, file_header, err)) {
+        g_debug("File_header was not added");
+        czi_free_file_header(file_header);
+    }
+    
+    // go to metadata
+    if(fseeko( source->stream, file_header->metadata_position, SEEK_SET)) {
+        g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                    "Failed to seek metadata position %ld: %s",
+                    file_header->metadata_position, g_strerror(errno) );
+        g_slice_free( struct _czi_segment_header, header );
+        czi_free_file_header(file_header);
+        return false;
+    }
+    
+    czi_read_next_segment_header(source, header, err);
+    
+    if( !strcmp( header->id, CZI_METADATA ) )
     {
       struct _czi_metadata * new_metadata = czi_new_metadata( czi, err );
       if( !new_metadata )
@@ -841,38 +874,76 @@ bool czi_decode_one_stream(
       if( !czi_read_metadata( source, new_metadata, err ) )
         return false;
     }
-    else if( !strcmp( header->id, CZI_ATTDIR ) )
-    {
-      //if( !czi_parse_attdir( source, czi, err ) )
-      if( !czi_skip_segment( source, header, err ) ) // Temporary
+    
+    // go to the subblock directory
+    if(fseeko( source->stream, file_header->directory_position, SEEK_SET)) {
+        g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                    "Failed to seek directory position %ld: %s",
+                    file_header->directory_position, g_strerror(errno) );
+        g_slice_free( struct _czi_segment_header, header );
+        czi_free_file_header(file_header);
         return false;
     }
-    else if( !strcmp( header->id, CZI_ATTACH ) )
-    {
-      if( !czi_skip_segment( source, header, err ) )
-        return false;
+    
+    bool read_next_segment = true;
+    while (read_next_segment) {
+        read_next_segment = czi_read_next_segment_header(source, header, err);
+        
+        if (!strcmp(header->id, CZI_DIRECTORY)) {
+            if(!czi_parse_directory( source, czi, err )) {
+                g_slice_free( struct _czi_segment_header, header );
+                return false;
+            }
+        }
+        else {
+            break;
+        }
     }
-    else if( !strcmp( header->id, CZI_SUBBLOCK ) )
-    {
-      if( !czi_skip_segment( source, header, err ) )
-        return false;
-    }
-    else if( !strcmp( header->id, CZI_DELETED ) )
-    {
-      if( !czi_skip_segment( source, header, err ) )
-        return false;
-    }
-    else
-    {
-      // unexptected segment
-      // try skip anyway...
-      g_warning( "Unexpected segment %s", header->id );;
-      if( !czi_skip_segment( source, header, err ) )
-        return false;
-    }
+    
+    // we assume error occuredbecause there are no segments left
+    g_slice_free( struct _czi_segment_header, header );
+    g_clear_error( err );
+    //err = NULL;
+
+  }
+  else {
+    // first segment in file must be the file header so we exit with error
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to read file header at %ld: %s",
+                 source->begin, g_strerror(errno) );
+    g_slice_free( struct _czi_segment_header, header );
+    return false;
   }
 
   return true;
+}
+
+bool czi_add_file_header(
+    struct _czi                   * czi,
+    struct _czi_file_header       * header,
+    GError                       ** err         G_GNUC_UNUSED
+)
+{
+    g_debug( "czi_add_file_header" );
+    g_assert( czi );
+    g_assert( header );
+    
+    struct _czi_file_header* file_header;
+    
+    // Check that file header was not registered yet
+    for( uint32_t i=0; i < czi->file_headers->len; ++i )
+    {
+        file_header = (struct _czi_file_header*) g_ptr_array_index(
+                                                    czi->file_headers,
+                                                    i
+                                                 );
+        if (!compare_guid(file_header->file_guid, header->file_guid)) {
+            g_ptr_array_add(czi->file_headers, header);
+            return true;
+        }
+    }
+    
+    return false;
 }
 
 bool czi_add_tile(
@@ -1817,6 +1888,45 @@ bool czi_read_dimension(
 //============================================================================
 //   DISPLAY
 //============================================================================
+
+char * guid_to_string(
+  uint8_t * guid
+)
+{
+  char * str = (char*) g_malloc( 36 );
+  int pos = 0;
+  for( int i=0; i<4; ++i ) {
+    sprintf( str+pos, "%X", guid[i] );
+    pos += 2;
+  }
+  str[pos] = '-';
+  pos++;
+  for( int i=4; i<6; ++i ) {
+    sprintf( str+pos, "%X", guid[i] );
+    pos += 2;
+  }
+  str[pos] = '-';
+  pos++;
+  for( int i=6; i<8; ++i ) {
+    sprintf( str+pos, "%X", guid[i] );
+    pos += 2;
+  }
+  str[pos] = '-';
+  pos++;
+  for( int i=8; i<10; ++i ) {
+    sprintf( str+pos, "%X", guid[i] );
+    pos += 2;
+  }
+  str[pos] = '-';
+  pos++;
+  for( int i=10; i<16; ++i ) {
+    sprintf( str+pos, "%X", guid[i] );
+    pos += 2;
+  }
+
+  str[16] = '\0';
+  return str;
+}
 
 void czi_display( struct _czi * ptr         G_GNUC_UNUSED,
                   uint16_t      alignment   G_GNUC_UNUSED )
