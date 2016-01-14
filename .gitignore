@@ -1,4 +1,5 @@
 *~
+*.a
 *.la
 *.lo
 *.loT
@@ -42,6 +43,7 @@ Makefile.in
 /test/extended
 /test/mosaic
 /test/parallel
+/test/profile
 /test/query
 /test/test
 /test/try_open

@@ -1,0 +1,4 @@
+- Add czi background use
+- Deal with alignment to global grid or region grid and no tiling
+- Validate read region size
+- Install openslide on MIRCen share

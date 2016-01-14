@@ -2,7 +2,7 @@
 #
 # OpenSlide, a library for reading whole slide image files
 #
-# Copyright (c) 2012-2014 Carnegie Mellon University
+# Copyright (c) 2012-2015 Carnegie Mellon University
 # All rights reserved.
 #
 # OpenSlide is free software: you can redistribute it and/or modify
@@ -20,7 +20,7 @@
 #
 
 from ConfigParser import RawConfigParser
-from contextlib import closing
+from contextlib import closing, contextmanager
 import filecmp
 import fnmatch
 from hashlib import sha256
@@ -35,7 +35,7 @@ import struct
 import subprocess
 import sys
 import tarfile
-from tempfile import mkdtemp, TemporaryFile
+from tempfile import mkdtemp, TemporaryFile, NamedTemporaryFile
 import textwrap
 from time import time as curtime
 from urlparse import urljoin
@@ -165,31 +165,36 @@ def _is_bigtiff(path):
         return False
 
 
-def _launch_test(test, slidefile, valgrind=False, testdir=None, debug=[],
-        args=[], **kwargs):
+def _launch_test(test, slidefile, valgrind=False, extra_checks=True,
+        testdir=None, debug=[], args=[], **kwargs):
     '''Start the specified test from the testdir directory against the
-    specified slide, running under Valgrind if requested.  debug options are
-    passed in OPENSLIDE_DEBUG.  args are appended to the command line.
-    kwargs are passed to the Popen constructor.  Return the Popen instance.'''
+    specified slide, running under Valgrind if requested.  If extra_checks
+    is False, turn off debug instrumentation that would invalidate benchmark
+    results.  debug options are passed in OPENSLIDE_DEBUG.  args are
+    appended to the command line.  kwargs are passed to the Popen
+    constructor.  Return the Popen instance.'''
 
     if testdir is None:
         testdir = '!!BUILDDIR!!'
     env = os.environ.copy()
     env.update(
-        G_DEBUG='gc-friendly',
         G_MESSAGES_DEBUG='',
-        G_SLICE='always-malloc',
-        MALLOC_CHECK_='1',
         OPENSLIDE_DEBUG=','.join(debug),
         GIO_USE_VFS='local',
     )
+    if extra_checks:
+        env.update(
+            G_DEBUG='gc-friendly',
+            G_SLICE='always-malloc',
+            MALLOC_CHECK_='1',
+        )
     args = [os.path.join(testdir, test), native_path(slidefile)] + args
     if valgrind:
         args = [os.path.join(testdir, '../libtool'), '--mode=execute',
                 'valgrind', '--quiet', '--error-exitcode=3',
                 '--suppressions=' + VALGRIND_SUPPRESSIONS,
                 '--leak-check=full', '--num-callers=30'] + args
-    else:
+    elif extra_checks:
         # debug-blocks retains pointers to freed slices, so don't use it
         # with Valgrind
         env['G_SLICE'] += ',debug-blocks'
@@ -455,13 +460,15 @@ def _unpack_one(testname):
 
     conf = _load_test_config(testname)
     slide = conf['base']
+    renames = conf.get('rename', {})
     generators = conf.get('generate', {})
     printed = False
     _fetch_one(slide)
 
     for relpath in _list_slide_files(slide):
         origpath = os.path.join(PRISTINE, slide, relpath)
-        newpath = os.path.join(WORKROOT, testname, relpath)
+        newpath = os.path.join(WORKROOT, testname,
+                renames.get(os.path.basename(relpath), relpath))
         deltapath = os.path.join(CASEROOT, testname,
                 os.path.basename(relpath) + '.xdelta')
         whiteoutpath = os.path.join(CASEROOT, testname,
@@ -550,12 +557,12 @@ def run(pattern='*'):
         sys.exit(1)
 
 
-@_command
-def coverage(outfile):
-    '''Unpack and run all tests and write coverage report to outfile.'''
-    # We have to rebuild the source in order to do profiling.  To minimize
-    # collateral damage, we unpack the dist tarball into a temp directory and
-    # build there.
+@contextmanager
+def _rebuild(configure_args):
+    '''Context manager: rebuild the source with the specified CFLAGS and
+    yield to the caller to do profiling.'''
+    # To minimize collateral damage, unpack the dist tarball into a temp
+    # directory and build there.
 
     top_builddir = os.path.dirname('!!BUILDDIR!!')
     prevdir = os.getcwd()
@@ -573,36 +580,44 @@ def coverage(outfile):
     os.unlink(tarpath)
     os.chdir('openslide-!!VERSION!!')
 
-    # Build with profiling enabled
-    subprocess.check_call(['./configure',
-            'CFLAGS=-O0 -g -fprofile-arcs -ftest-coverage'])
+    # Build with specified CFLAGS
+    subprocess.check_call(['./configure'] + configure_args)
     subprocess.check_call(['make'])
 
-    # Run tests
-    _run_all(testdir='test')
-
-    # Generate coverage reports
-    for dirpath, dirnames, filenames in os.walk('src'):
-        paths = [os.path.join(dirpath, name)
-                for name in fnmatch.filter(sorted(filenames), '*.gcda')]
-        if paths:
-            subprocess.check_call(['gcov', '-o', dirpath] + paths)
-
-    # Record unexecuted lines
-    proc = subprocess.Popen(['grep', '-FC', '2', '#####'] +
-            fnmatch.filter(sorted(os.listdir('.')), '*.gcov'),
-            stdout=subprocess.PIPE)
-    report, _ = proc.communicate()
-    if proc.returncode:
-        raise IOError('Process returned exit status %d' % proc.returncode)
-    report = '\n'.join(l.replace('.c.gcov', '.c', 1)
-            for l in report.split('\n'))
-    os.chdir(prevdir)
-    with open(outfile, 'w') as fh:
-        fh.write(report)
+    # Let the caller run, passing it the directory we came from.
+    # Intentionally don't clean up tempdir on exception.
+    yield prevdir
 
     # Remove temporary directory
+    os.chdir(prevdir)
     rmtree(tempdir)
+
+
+@_command
+def coverage(outfile):
+    '''Unpack and run all tests and write coverage report to outfile.'''
+    with _rebuild(['CFLAGS=-O0 -g -fprofile-arcs -ftest-coverage']) as basedir:
+        # Run tests
+        _run_all(testdir='test')
+
+        # Generate coverage reports
+        for dirpath, dirnames, filenames in os.walk('src'):
+            paths = [os.path.join(dirpath, name)
+                    for name in fnmatch.filter(sorted(filenames), '*.gcda')]
+            if paths:
+                subprocess.check_call(['gcov', '-o', dirpath] + paths)
+
+        # Record unexecuted lines
+        proc = subprocess.Popen(['grep', '-FC', '2', '#####'] +
+                fnmatch.filter(sorted(os.listdir('.')), '*.gcov'),
+                stdout=subprocess.PIPE)
+        report, _ = proc.communicate()
+        if proc.returncode:
+            raise IOError('Process returned exit status %d' % proc.returncode)
+        report = '\n'.join(l.replace('.c.gcov', '.c', 1)
+                for l in report.split('\n'))
+        with open(os.path.join(basedir, outfile), 'w') as fh:
+            fh.write(report)
 
 
 @_command
@@ -625,24 +640,97 @@ def mosaic(outfile):
             native_path(outfile)])
 
 
-@_command
-def time(pattern='*'):
-    '''Time openslide_open() for all successful primary tests matching the
-    specified pattern.'''
-    tests = _list_tests(pattern)
-    for testname in tests:
+def _successful_primary_tests(pattern='*'):
+    '''Yield testname and slide path for each successful primary test.'''
+    for testname in _list_tests(pattern):
         conf = _load_test_config(testname)
         if (not conf.get('primary', False) or not conf['success']
                 or not _features_available(conf)):
             continue
         _unpack_one(testname)
         slidefile = os.path.join(WORKROOT, testname, conf['slide'])
+        yield testname, slidefile
+
+
+@_command
+def time(pattern='*'):
+    '''Time openslide_open() for all successful primary tests matching the
+    specified pattern.'''
+    for testname, slidefile in _successful_primary_tests(pattern):
         proc = _launch_test('try_open', slidefile, args=['-t'],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                extra_checks=False, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE)
         out, err = proc.communicate()
         if proc.returncode or err:
             out = 'failed'
         print '%-40s %10s' % (testname, out.strip())
+
+
+@_command
+def profile(pattern='*', level=0):
+    '''Profile openslide_read_region() on the specified level for all
+    successful primary tests matching the specified pattern.'''
+    env = os.environ.copy()
+    env.update(
+        G_MESSAGES_DEBUG='',
+        OPENSLIDE_DEBUG='performance',
+    )
+    line = '#' * 79
+    for testname, slidefile in _successful_primary_tests(pattern):
+        print '%s\n# %s\n%s\n' % (line, testname, line)
+        with NamedTemporaryFile(prefix='openslide-callgrind-') as fh:
+            args = ['!!BUILDDIR!!/../libtool', '--mode=execute',
+                    'valgrind', '--quiet', '--error-exitcode=3',
+                    '--tool=callgrind', '--callgrind-out-file=' + fh.name,
+                    '--instr-atstart=no',
+                    '!!BUILDDIR!!/profile', slidefile, str(level)]
+            if subprocess.call(args, env=env) == 0:
+                subprocess.check_call(['callgrind_annotate',
+                        '--threshold=80', fh.name])
+
+
+@_command
+def exports():
+    '''Report exported or hidden symbols with improper names.'''
+    def get_symbols(basedir):
+        proc = subprocess.Popen(['objdump', '-T',
+                os.path.join(basedir, 'src', '.libs', 'libopenslide.so')],
+                stdout=subprocess.PIPE)
+        out, _ = proc.communicate()
+        if proc.returncode:
+            raise IOError('objdump returned exit status %d' % proc.returncode)
+        for line in out.splitlines():
+            words = line.split()
+            if len(words) < 3:
+                continue
+            if words[1] != 'g':
+                # Not a global symbol
+                continue
+            yield words[-1]
+
+    # Magic ELF symbols
+    ignore_symbols = set(['__bss_start', '_edata', '_end', '_fini', '_init'])
+
+    # Check exported symbols
+    exported_symbols = set(get_symbols('..')) - ignore_symbols
+    bad_exported = set(symbol for symbol in exported_symbols
+            if not symbol.startswith('openslide_'))
+
+    # Check hidden symbols
+    with _rebuild(['gl_cv_cc_visibility=no']):
+        hidden_symbols = (set(get_symbols('.')) - exported_symbols -
+                ignore_symbols)
+        bad_hidden = set(symbol for symbol in hidden_symbols
+                if not symbol.startswith('_openslide_')
+                and symbol != 'openslide_cairo_read_region')  # legacy
+
+    # Report
+    for symbol in sorted(bad_exported):
+        print >>sys.stderr, 'Badly-named exported symbol:', symbol
+    for symbol in sorted(bad_hidden):
+        print >>sys.stderr, 'Badly-named hidden symbol:', symbol
+    if bad_exported or bad_hidden:
+        sys.exit(1)
 
 
 @_command

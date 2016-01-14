@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ(2.61)
-AC_INIT([OpenSlide], [3.4.0], [openslide-users@lists.andrew.cmu.edu], [openslide], [http://openslide.org])
+AC_INIT([OpenSlide], [3.4.1], [openslide-users@lists.andrew.cmu.edu], [openslide], [http://openslide.org])
 AC_CONFIG_SRCDIR([src])
 AC_CONFIG_HEADER([config.h])
 AM_INIT_AUTOMAKE([foreign subdir-objects 1.11.1 dist-xz])
@@ -186,15 +186,34 @@ AS_CASE([$host_os],
       # unknown
       AC_MSG_RESULT([unknown])
       AC_DEFINE([FOPEN_CLOEXEC_FLAG], [""])
+      AC_DEFINE([NONATOMIC_CLOEXEC], [1], [Define to 1 if fopen() cannot atomically set FD_CLOEXEC.])
     ], [
       # cross compile
       AC_MSG_RESULT([unknown (cross compile)])
       AC_DEFINE([FOPEN_CLOEXEC_FLAG], [""])
+      AC_DEFINE([NONATOMIC_CLOEXEC], [1])
     ])
   ]
 )
 # Fallback: racily use fcntl()
 AC_CHECK_FUNCS([fcntl])
+
+# Windows _wfopen()
+AC_CHECK_FUNCS([_wfopen])
+
+# Mac OS X proc_pidfdinfo()
+AC_MSG_CHECKING([for proc_pidfdinfo])
+AC_LINK_IFELSE([
+  AC_LANG_PROGRAM(
+    [#include <libproc.h>],
+    [proc_pidfdinfo(0, 0, PROC_PIDFDKQUEUEINFO, NULL, 0)]
+  )
+], [
+  AC_MSG_RESULT([yes])
+  AC_DEFINE([HAVE_PROC_PIDFDINFO], [1], [Define to 1 if you have the proc_pidfdinfo function.])
+], [
+  AC_MSG_RESULT([no])
+])
 
 # The test driver has special support for testing Windows builds from Cygwin
 AC_MSG_CHECKING([whether to cross-test from Cygwin])

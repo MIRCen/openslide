@@ -1,8 +1,9 @@
 /*
  *  OpenSlide, a library for reading whole slide image files
  *
- *  Copyright (c) 2007-2014 Carnegie Mellon University
+ *  Copyright (c) 2007-2015 Carnegie Mellon University
  *  Copyright (c) 2011 Google, Inc.
+ *  Copyright (c) 2015 Benjamin Gilbert
  *  All rights reserved.
  *
  *  OpenSlide is free software: you can redistribute it and/or modify
@@ -28,16 +29,18 @@
 
 #include <openjpeg.h>
 
-struct read_callback_params {
-  void *data;
-  int32_t datalen;
+struct buffer_state {
+  uint8_t *data;
+  int32_t offset;
+  int32_t length;
 };
 
-static void write_pixel_ycbcr(uint32_t *dest,
-                              uint8_t c0, uint8_t c1, uint8_t c2) {
-  int16_t R = c0 + _openslide_R_Cr[c2];
-  int16_t G = c0 + _openslide_G_CbCr[c1][c2];
-  int16_t B = c0 + _openslide_B_Cb[c1];
+static inline void write_pixel_ycbcr(uint32_t *dest, uint8_t Y,
+                                     int16_t R_chroma, int16_t G_chroma,
+                                     int16_t B_chroma) {
+  int16_t R = Y + R_chroma;
+  int16_t G = Y + G_chroma;
+  int16_t B = Y + B_chroma;
 
   R = CLAMP(R, 0, 255);
   G = CLAMP(G, 0, 255);
@@ -46,17 +49,15 @@ static void write_pixel_ycbcr(uint32_t *dest,
   *dest = 0xff000000 | ((uint8_t) R << 16) | ((uint8_t) G << 8) | ((uint8_t) B);
 }
 
-static void write_pixel_rgb(uint32_t *dest,
-                            uint8_t c0, uint8_t c1, uint8_t c2) {
-  *dest = 0xff000000 | c0 << 16 | c1 << 8 | c2;
+static inline void write_pixel_rgb(uint32_t *dest,
+                                   uint8_t R, uint8_t G, uint8_t B) {
+  *dest = 0xff000000 | R << 16 | G << 8 | B;
 }
 
 static void unpack_argb(enum _openslide_jp2k_colorspace space,
                         opj_image_comp_t *comps,
                         uint32_t *dest,
                         int32_t w, int32_t h) {
-  // TODO: too slow, and with duplicated code!
-
   int c0_sub_x = w / comps[0].w;
   int c1_sub_x = w / comps[1].w;
   int c2_sub_x = w / comps[2].w;
@@ -64,35 +65,101 @@ static void unpack_argb(enum _openslide_jp2k_colorspace space,
   int c1_sub_y = h / comps[1].h;
   int c2_sub_y = h / comps[2].h;
 
-  int64_t i = 0;
+  //g_debug("color space %d, subsamples x %d-%d-%d y %d-%d-%d", space, c0_sub_x, c1_sub_x, c2_sub_x, c0_sub_y, c1_sub_y, c2_sub_y);
 
-  switch (space) {
-  case OPENSLIDE_JP2K_YCBCR:
+  if (space == OPENSLIDE_JP2K_YCBCR &&
+      c0_sub_x == 1 && c1_sub_x == 2 && c2_sub_x == 2 &&
+      c0_sub_y == 1 && c1_sub_y == 1 && c2_sub_y == 1) {
+    // Aperio 33003
     for (int32_t y = 0; y < h; y++) {
-      for (int32_t x = 0; x < w; x++) {
-        uint8_t c0 = comps[0].data[(y / c0_sub_y) * comps[0].w + (x / c0_sub_x)];
-        uint8_t c1 = comps[1].data[(y / c1_sub_y) * comps[1].w + (x / c1_sub_x)];
-        uint8_t c2 = comps[2].data[(y / c2_sub_y) * comps[2].w + (x / c2_sub_x)];
-
-        write_pixel_ycbcr(dest + i, c0, c1, c2);
-        i++;
+      int32_t c0_row_base = y * comps[0].w;
+      int32_t c1_row_base = y * comps[1].w;
+      int32_t c2_row_base = y * comps[2].w;
+      int32_t x;
+      for (x = 0; x < w - 1; x += 2) {
+        uint8_t c0 = comps[0].data[c0_row_base + x];
+        uint8_t c1 = comps[1].data[c1_row_base + (x / 2)];
+        uint8_t c2 = comps[2].data[c2_row_base + (x / 2)];
+        int16_t R_chroma = _openslide_R_Cr[c2];
+        int16_t G_chroma = (_openslide_G_Cb[c1] + _openslide_G_Cr[c2]) >> 16;
+        int16_t B_chroma = _openslide_B_Cb[c1];
+        write_pixel_ycbcr(dest++, c0, R_chroma, G_chroma, B_chroma);
+        c0 = comps[0].data[c0_row_base + x + 1];
+        write_pixel_ycbcr(dest++, c0, R_chroma, G_chroma, B_chroma);
+      }
+      if (x < w) {
+        uint8_t c0 = comps[0].data[c0_row_base + x];
+        uint8_t c1 = comps[1].data[c1_row_base + (x / 2)];
+        uint8_t c2 = comps[2].data[c2_row_base + (x / 2)];
+        int16_t R_chroma = _openslide_R_Cr[c2];
+        int16_t G_chroma = (_openslide_G_Cb[c1] + _openslide_G_Cr[c2]) >> 16;
+        int16_t B_chroma = _openslide_B_Cb[c1];
+        write_pixel_ycbcr(dest++, c0, R_chroma, G_chroma, B_chroma);
       }
     }
 
-    break;
+  } else if (space == OPENSLIDE_JP2K_YCBCR) {
+    // Slow fallback
+    static gint warned_slowpath_ycbcr;
+    _openslide_performance_warn_once(&warned_slowpath_ycbcr,
+                                     "Decoding YCbCr JP2K image via "
+                                     "slow fallback, subsamples "
+                                     "x %d-%d-%d y %d-%d-%d",
+                                     c0_sub_x, c1_sub_x, c2_sub_x,
+                                     c0_sub_y, c1_sub_y, c2_sub_y);
 
-  case OPENSLIDE_JP2K_RGB:
     for (int32_t y = 0; y < h; y++) {
+      int32_t c0_row_base = (y / c0_sub_y) * comps[0].w;
+      int32_t c1_row_base = (y / c1_sub_y) * comps[1].w;
+      int32_t c2_row_base = (y / c2_sub_y) * comps[2].w;
       for (int32_t x = 0; x < w; x++) {
-        uint8_t c0 = comps[0].data[(y / c0_sub_y) * comps[0].w + (x / c0_sub_x)];
-        uint8_t c1 = comps[1].data[(y / c1_sub_y) * comps[1].w + (x / c1_sub_x)];
-        uint8_t c2 = comps[2].data[(y / c2_sub_y) * comps[2].w + (x / c2_sub_x)];
-
-        write_pixel_rgb(dest + i, c0, c1, c2);
-        i++;
+        uint8_t c0 = comps[0].data[c0_row_base + (x / c0_sub_x)];
+        uint8_t c1 = comps[1].data[c1_row_base + (x / c1_sub_x)];
+        uint8_t c2 = comps[2].data[c2_row_base + (x / c2_sub_x)];
+        int16_t R_chroma = _openslide_R_Cr[c2];
+        int16_t G_chroma = (_openslide_G_Cb[c1] + _openslide_G_Cr[c2]) >> 16;
+        int16_t B_chroma = _openslide_B_Cb[c1];
+        write_pixel_ycbcr(dest++, c0, R_chroma, G_chroma, B_chroma);
       }
     }
-    break;
+
+  } else if (space == OPENSLIDE_JP2K_RGB &&
+             c0_sub_x == 1 && c1_sub_x == 1 && c2_sub_x == 1 &&
+             c0_sub_y == 1 && c1_sub_y == 1 && c2_sub_y == 1) {
+    // Aperio 33005
+    for (int32_t y = 0; y < h; y++) {
+      int32_t c0_row_base = y * comps[0].w;
+      int32_t c1_row_base = y * comps[1].w;
+      int32_t c2_row_base = y * comps[2].w;
+      for (int32_t x = 0; x < w; x++) {
+        uint8_t c0 = comps[0].data[c0_row_base + x];
+        uint8_t c1 = comps[1].data[c1_row_base + x];
+        uint8_t c2 = comps[2].data[c2_row_base + x];
+        write_pixel_rgb(dest++, c0, c1, c2);
+      }
+    }
+
+  } else if (space == OPENSLIDE_JP2K_RGB) {
+    // Slow fallback
+    static gint warned_slowpath_rgb;
+    _openslide_performance_warn_once(&warned_slowpath_rgb,
+                                     "Decoding RGB JP2K image via "
+                                     "slow fallback, subsamples "
+                                     "x %d-%d-%d y %d-%d-%d",
+                                     c0_sub_x, c1_sub_x, c2_sub_x,
+                                     c0_sub_y, c1_sub_y, c2_sub_y);
+
+    for (int32_t y = 0; y < h; y++) {
+      int32_t c0_row_base = (y / c0_sub_y) * comps[0].w;
+      int32_t c1_row_base = (y / c1_sub_y) * comps[1].w;
+      int32_t c2_row_base = (y / c2_sub_y) * comps[2].w;
+      for (int32_t x = 0; x < w; x++) {
+        uint8_t c0 = comps[0].data[c0_row_base + (x / c0_sub_x)];
+        uint8_t c1 = comps[1].data[c1_row_base + (x / c1_sub_x)];
+        uint8_t c2 = comps[2].data[c2_row_base + (x / c2_sub_x)];
+        write_pixel_rgb(dest++, c0, c1, c2);
+      }
+    }
   }
 }
 
@@ -117,15 +184,36 @@ static void error_callback(const char *msg, void *data) {
 #ifdef HAVE_OPENJPEG2
 
 static OPJ_SIZE_T read_callback(void *buf, OPJ_SIZE_T count, void *data) {
-  struct read_callback_params *params = data;
+  struct buffer_state *state = data;
 
-  if (params->datalen != (int32_t) count) {
-    params->datalen = 0;
+  count = MIN(count, (OPJ_SIZE_T) (state->length - state->offset));
+  if (!count) {
     return (OPJ_SIZE_T) -1;
   }
-  memcpy(buf, params->data, count);
-  params->datalen = 0;
+  memcpy(buf, state->data + state->offset, count);
+  state->offset += count;
   return count;
+}
+
+static OPJ_OFF_T skip_callback(OPJ_OFF_T count, void *data) {
+  struct buffer_state *state = data;
+
+  int32_t orig_offset = state->offset;
+  state->offset = CLAMP(state->offset + count, 0, state->length);
+  if (count && state->offset == orig_offset) {
+    return -1;
+  }
+  return state->offset - orig_offset;
+}
+
+static OPJ_BOOL seek_callback(OPJ_OFF_T offset, void *data) {
+  struct buffer_state *state = data;
+
+  if (offset < 0 || offset > state->length) {
+    return OPJ_FALSE;
+  }
+  state->offset = offset;
+  return OPJ_TRUE;
 }
 
 bool _openslide_jp2k_decode_buffer(uint32_t *dest,
@@ -144,13 +232,15 @@ bool _openslide_jp2k_decode_buffer(uint32_t *dest,
   // avoid tracking stream offset (and implementing skip callback) by having
   // OpenJPEG read the whole buffer at once
   opj_stream_t *stream = opj_stream_create(datalen, true);
-  struct read_callback_params read_params = {
+  struct buffer_state state = {
     .data = data,
-    .datalen = datalen,
+    .length = datalen,
   };
-  opj_stream_set_user_data(stream, &read_params, NULL);
+  opj_stream_set_user_data(stream, &state, NULL);
   opj_stream_set_user_data_length(stream, datalen);
   opj_stream_set_read_function(stream, read_callback);
+  opj_stream_set_skip_function(stream, skip_callback);
+  opj_stream_set_seek_function(stream, seek_callback);
 
   // init codec
   opj_codec_t *codec = opj_create_decompress(OPJ_CODEC_J2K);
