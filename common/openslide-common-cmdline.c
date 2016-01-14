@@ -138,12 +138,8 @@ void common_parse_commandline(const struct common_usage_info *info,
   }
 }
 
-// <<<<<<< HEAD:tools/openslide-tools-common.c
-// void _openslide_tools_usage(const struct openslide_tools_usage_info *info) {
-// #ifdef HAVE_G_OPTION_CONTEXT_GET_HELP
-// =======
 void common_usage(const struct common_usage_info *info) {
-//>>>>>>> 219f0077169b8815d1a1028dc14a59f6c8c37042:common/openslide-common-cmdline.c
+#ifdef HAVE_G_OPTION_CONTEXT_GET_HELP
   GOptionContext *octx = make_option_context(info);
 
   gchar *help = g_option_context_get_help(octx, TRUE, NULL);

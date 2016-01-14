@@ -74,7 +74,6 @@ src_libopenslide_la_CPPFLAGS = -pedantic -D_OPENSLIDE_BUILDING_DLL \
 	$(GDKPIXBUF_CFLAGS) $(ZLIB_CFLAGS) $(LIBJXR_CFLAGS) -DG_LOG_DOMAIN=\"Openslide\" \
 	-I$(top_srcdir)/src
 
-#src_libopenslide_la_LDFLAGS = $(SQLITE3_LIBS) -version-info 4:0:4 -no-undefined
 src_libopenslide_la_LDFLAGS = -version-info 4:1:4 -no-undefined
 
 pkginclude_HEADERS = \
@@ -119,31 +118,6 @@ noinst_SCRIPTS = test/driver
 CLEANFILES += test/driver
 EXTRA_DIST += test/driver.in
 
-# <<<<<<< HEAD
-# test_test_CPPFLAGS = $(GLIB2_CFLAGS) $(CAIRO_CFLAGS) $(VALGRIND_CFLAGS) $(LIBJXR_CFLAGS) -I$(top_srcdir)/src
-# # VALGRIND_LIBS not needed
-# test_test_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(CAIRO_LIBS) $(LIBJXR_LIBS)
-# 
-# test_try_open_SOURCES = test/test-common.c test/try_open.c
-# test_try_open_CPPFLAGS = $(GLIB2_CFLAGS) $(LIBJXR_CFLAGS) -I$(top_srcdir)/src
-# test_try_open_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(LIBJXR_LIBS)
-# 
-# test_parallel_CPPFLAGS = $(GLIB2_CFLAGS) $(LIBJXR_CFLAGS) -I$(top_srcdir)/src
-# test_parallel_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(LIBJXR_LIBS)
-# 
-# test_query_CPPFLAGS = $(GLIB2_CFLAGS) $(LIBJXR_CFLAGS) -I$(top_srcdir)/src
-# test_query_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(LIBJXR_LIBS)
-# 
-# test_extended_SOURCES = test/test-common.c test/extended.c
-# test_extended_CPPFLAGS = $(GLIB2_CFLAGS) $(LIBJXR_CFLAGS) -I$(top_srcdir)/src
-# test_extended_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(LIBJXR_LIBS)
-# 
-# # test_czireader_CPPFLAGS = $(src_libopenslide_la_CPPFLAGS)
-# # test_czireader_LDADD = src/libopenslide.la $(src_libopenslide_la_LIBADD)
-# 
-# test_mosaic_CPPFLAGS = $(GLIB2_CFLAGS) $(CAIRO_CFLAGS) $(LIBJXR_CFLAGS) -I$(top_srcdir)/src
-# test_mosaic_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(CAIRO_LIBS) $(LIBJXR_LIBS)
-# =======
 test_test_CPPFLAGS = $(COMMON_CPPFLAGS) $(CAIRO_CFLAGS) $(VALGRIND_CFLAGS)
 # VALGRIND_LIBS not needed
 test_test_LDADD = $(COMMON_LDADD) $(CAIRO_LIBS)
@@ -165,7 +139,6 @@ test_mosaic_LDADD = $(COMMON_LDADD) $(CAIRO_LIBS)
 
 test_profile_CPPFLAGS = $(COMMON_CPPFLAGS) $(VALGRIND_CFLAGS)
 test_profile_LDADD = $(COMMON_LDADD)
-#>>>>>>> 219f0077169b8815d1a1028dc14a59f6c8c37042
 
 if CYGWIN_CROSS_TEST
 noinst_PROGRAMS += test/symlink
@@ -188,38 +161,23 @@ test/driver: test/driver.in Makefile
 # show-properties
 bin_PROGRAMS = tools/openslide-show-properties
 man_MANS = tools/openslide-show-properties.1
-# <<<<<<< HEAD
-# tools_openslide_show_properties_SOURCES = tools/openslide-tools-common.c tools/openslide-show-properties.c
-# tools_openslide_show_properties_CPPFLAGS = -I$(top_srcdir)/src $(GLIB2_CFLAGS) $(LIBJXR_CFLAGS)
-# tools_openslide_show_properties_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(SQLITE3_LIBS) $(LIBJXR_LIBS)
-# =======
+
 tools_openslide_show_properties_CPPFLAGS = $(COMMON_CPPFLAGS)
 tools_openslide_show_properties_LDADD = $(COMMON_LDADD)
-#>>>>>>> 219f0077169b8815d1a1028dc14a59f6c8c37042
 
 # quickhash1sum
 bin_PROGRAMS += tools/openslide-quickhash1sum
 man_MANS += tools/openslide-quickhash1sum.1
-# <<<<<<< HEAD
-# tools_openslide_quickhash1sum_SOURCES = tools/openslide-tools-common.c tools/openslide-quickhash1sum.c
-# tools_openslide_quickhash1sum_CPPFLAGS = -I$(top_srcdir)/src $(GLIB2_CFLAGS) $(LIBJXR_CFLAGS)
-# tools_openslide_quickhash1sum_LDADD = src/libopenslide.la $(GLIB2_LIBS) $(LIBJXR_LIBS)
-# =======
+
 tools_openslide_quickhash1sum_CPPFLAGS = $(COMMON_CPPFLAGS)
 tools_openslide_quickhash1sum_LDADD = $(COMMON_LDADD)
-#>>>>>>> 219f0077169b8815d1a1028dc14a59f6c8c37042
 
 # write-png
 bin_PROGRAMS += tools/openslide-write-png
 man_MANS += tools/openslide-write-png.1
-# <<<<<<< HEAD
-# tools_openslide_write_png_SOURCES = tools/openslide-tools-common.c tools/openslide-write-png.c
-# tools_openslide_write_png_CPPFLAGS = -I$(top_srcdir)/src $(LIBPNG_CFLAGS) $(GLIB2_CFLAGS) $(LIBJXR_CFLAGS)
-# tools_openslide_write_png_LDADD = src/libopenslide.la $(LIBPNG_LIBS) $(GLIB2_LIBS) $(SQLITE3_LIBS) $(LIBJXR_LIBS)
-# =======
+
 tools_openslide_write_png_CPPFLAGS = $(COMMON_CPPFLAGS) $(LIBPNG_CFLAGS)
 tools_openslide_write_png_LDADD = $(COMMON_LDADD) $(LIBPNG_LIBS)
-#>>>>>>> 219f0077169b8815d1a1028dc14a59f6c8c37042
 
 # man pages
 EXTRA_DIST += $(man_MANS:=.in)
