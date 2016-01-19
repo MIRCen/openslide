@@ -39,13 +39,14 @@ src_libopenslide_la_SOURCES = \
 	src/openslide-vendor-leica.c \
 	src/openslide-vendor-mirax.c \
 	src/openslide-vendor-philips.c \
-	src/openslide-vendor-sakura.c \
 	src/openslide-vendor-trestle.c \
 	src/openslide-vendor-ventana.c \
 	src/openslide-vendor-zeiss.c
 	
 if HAVE_SQLITE3
-src_libopenslide_la_SOURCES += src/openslide-decode-sqlite.c
+src_libopenslide_la_SOURCES += \
+	src/openslide-decode-sqlite.c \
+	src/openslide-vendor-sakura.c
 endif
 
 # Update sources for compatibility
@@ -107,8 +108,8 @@ common_libopenslide_common_a_SOURCES = \
 	common/openslide-common-fail.c \
 	common/openslide-common-fd.c
 
-COMMON_CPPFLAGS = $(GLIB2_CFLAGS) -I$(top_srcdir)/src -I$(top_srcdir)/common
-COMMON_LDADD = common/libopenslide-common.a src/libopenslide.la $(GLIB2_LIBS) $(LIBJXR_LIBS)
+COMMON_CPPFLAGS = $(GLIB2_CFLAGS) $(SQLITE3_CFLAGS) $(LIBJXR_CFLAGS) -I$(top_srcdir)/src -I$(top_srcdir)/common
+COMMON_LDADD = common/libopenslide-common.a src/libopenslide.la $(GLIB2_LIBS) $(SQLITE3_LIBS) $(LIBJXR_LIBS)
 
 
 # test

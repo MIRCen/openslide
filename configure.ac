@@ -135,10 +135,13 @@ PKG_CHECK_MODULES(LIBXML2, [libxml-2.0])
 
 # optional
 PKG_CHECK_MODULES(SQLITE3, [sqlite3 >= 3.6.20], [
+  dnl This is the HAVE_SQLITE3 autoconf output variable
   AC_DEFINE([HAVE_SQLITE3], [1], [Define to 1 if you have SQLITE3 >= 3.6.20])
+  dnl This is the HAVE_SQLITE3 autoconf internal variable
+  HAVE_SQLITE3=1
 ], [:] )
 
-AM_CONDITIONAL([HAVE_SQLITE3], [test x$HAVE_SQLITE3 = x])
+AM_CONDITIONAL([HAVE_SQLITE3], [test x$HAVE_SQLITE3 = x1])
 
 PKG_CHECK_MODULES(VALGRIND, [valgrind], [
   AC_DEFINE([HAVE_VALGRIND], [1], [Define to 1 if you have the Valgrind headers.])
