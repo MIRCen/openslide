@@ -599,6 +599,7 @@ static const char * czi_pixel_t_string(             enum czi_pixel_t pixel_type 
 static const char * czi_pyramid_t_string(           enum czi_pyramid_t pyramid_type );
 static const char * czi_roi_shape_t_string(         enum czi_roi_shape_t roi_shape_type );
 static const char * czi_roi_covering_mode_t_string( enum czi_roi_covering_mode_t roi_covering_mode );
+static const char * czi_boolean_t_string(           bool b );
 
 //--- display ----------------------------------------------------------------
 /*TODO*/static void czi_display(                      struct _czi                           * ptr, uint16_t alignment ) G_GNUC_UNUSED;
@@ -1888,7 +1889,7 @@ bool czi_read_dimension(
 //============================================================================
 //   DISPLAY
 //============================================================================
-
+#if 0
 char * guid_to_string(
   uint8_t * guid
 )
@@ -1927,6 +1928,7 @@ char * guid_to_string(
   str[16] = '\0';
   return str;
 }
+#endif
 
 void czi_display( struct _czi * ptr         G_GNUC_UNUSED,
                   uint16_t      alignment   G_GNUC_UNUSED )
@@ -2403,11 +2405,14 @@ const char * czi_roi_covering_mode_t_string( enum czi_roi_covering_mode_t roi_co
   }
 }
 
+const char * czi_boolean_t_string( bool b ) {
+    return (b ? "true" : "false");
+}
 
 // key:PARSING-PRI-DEF
 //============================================================================
 //
-//                  ZISRAW PARSING PUBLIC API: DEFINITIONS
+//                  ZISRAW PARSING PRIVATE API: DEFINITIONS
 //
 //============================================================================
 
@@ -2701,7 +2706,7 @@ GList * _openslide_czi_get_level_tiles(
   struct _czi_level * level;
   struct _czi_tile * tile;
   struct _openslide_czi_tile_descriptor * tile_desc;
-  GList * intern_list, * intern_list_current, * extern_list;
+  GList * intern_list, * intern_list_current, * extern_list = NULL;
 
   level = (struct _czi_level *) g_ptr_array_index( czi->levels, i );
   intern_list = g_hash_table_get_values( level->tiles );
@@ -3356,6 +3361,14 @@ static bool zeiss_set_grids( openslide_t * osr, _openslide_czi * czi, GError ** 
 #define ZEISS_CH_EXPTIME       "zeiss.information.image.dimensions.channel[%d].exposure-time"
 #define ZEISS_CH_THCK          "zeiss.information.image.dimensions.channel[%d].section-thickness"
 
+#define ZEISS_COMP_UNKNOWN     "zeiss.information.image.compressions.has-unknown-tiles"
+#define ZEISS_COMP_UNCOMP      "zeiss.information.image.compressions.has-uncompressed-tiles"
+#define ZEISS_COMP_JPEG        "zeiss.information.image.compressions.has-jpeg-tiles"
+#define ZEISS_COMP_LZW         "zeiss.information.image.compressions.has-lzw-tiles"
+#define ZEISS_COMP_JPEGXR      "zeiss.information.image.compressions.has-jpegxr-tiles"
+#define ZEISS_COMP_CAMSPEC     "zeiss.information.image.compressions.has-camera-specific-tiles"
+#define ZEISS_COMP_SYSSPEC     "zeiss.information.image.compressions.has-system-specific-tiles"
+
 #define ZEISS_OBJ_COUNT        "zeiss.information.instrument.objective-count"
 #define ZEISS_OBJ_NAME         "zeiss.information.instrument.objective[%d].objective-name"
 #define ZEISS_OBJ_LENSNA       "zeiss.information.instrument.objective[%d].lens-na"
@@ -3379,6 +3392,7 @@ static bool zeiss_set_grids( openslide_t * osr, _openslide_czi * czi, GError ** 
 #define ZEISS_TILEREGION_ACQ     "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region[%d].is-used-for-acquisition"
 #define ZEISS_TILEREGION_PROTECT "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region[%d].is-protected"
 #define ZEISS_TILEREGION_CTYPE   "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region[%d].contour-type"
+
 
 // Used for openslide properties
 #define ZEISS_VOXELSIZE_X      ZEISS_SC_X
@@ -3603,6 +3617,44 @@ bool zeiss_set_properties(
     "/ImageDocument/Metadata/Information/Image/PixelType" );
   _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_BIT_COUNT,
     "/ImageDocument/Metadata/Information/Image/ComponentBitCount" );
+  
+  // Information / Image / Compression
+  g_hash_table_insert( osr->properties,
+                       g_strdup( ZEISS_COMP_UNCOMP ),
+                       g_strdup(
+                           czi_boolean_t_string(
+                                _openslide_czi_has_data_uncompressed( czi )
+                       )));
+  g_hash_table_insert( osr->properties,
+                       g_strdup( ZEISS_COMP_JPEG ),
+                       g_strdup(
+                           czi_boolean_t_string(
+                                _openslide_czi_has_data_jpg( czi )
+                       )));
+  g_hash_table_insert( osr->properties,
+                       g_strdup( ZEISS_COMP_LZW ),
+                       g_strdup(
+                           czi_boolean_t_string(
+                                _openslide_czi_has_data_lzw( czi )
+                       )));
+  g_hash_table_insert( osr->properties,
+                       g_strdup( ZEISS_COMP_JPEGXR ),
+                       g_strdup(
+                           czi_boolean_t_string(
+                                _openslide_czi_has_data_jpgxr( czi )
+                       )));
+  g_hash_table_insert( osr->properties,
+                       g_strdup( ZEISS_COMP_CAMSPEC ),
+                       g_strdup(
+                           czi_boolean_t_string(
+                                _openslide_czi_has_data_cameraspec( czi )
+                       )));
+  g_hash_table_insert( osr->properties,
+                       g_strdup( ZEISS_COMP_SYSSPEC ),
+                       g_strdup(
+                           czi_boolean_t_string(
+                                _openslide_czi_has_data_systemspec( czi )
+                       )));
 
   // Information / Image / Dimensions
   int32_t channel_count = 0;
@@ -4134,7 +4186,8 @@ bool zeiss_tileread(
                  "Unable to get tile descriptor: %ld", tile_unique_id );
     return false;
   }
-  //g_debug("zeiss_tileread::tile %ld", tile_desc->uid);
+  
+  g_debug("zeiss_tileread::tile %ld", tile_desc->uid);
 
   // Try to get tile data from cache
   struct _openslide_cache_entry *cache_entry;
@@ -4172,6 +4225,7 @@ bool zeiss_tileread(
 
     // Uncompress tile data if needed
     if (tile_desc->compression != UNCOMPRESSED) {
+      g_debug("Uncompressing tile");
       internal_tile_data = _openslide_czi_uncompress_tile( tile_desc,
                                                            tile_data,
                                                            data_size,
