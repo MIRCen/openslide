@@ -516,6 +516,7 @@ const char * aligned_to_local_tile_region  = "ALIGNED_TO_LOCAL_TILE_REGION";
 //   PRIVATE DEFINES
 //============================================================================
 #define CZI_DISPLAY_INDENT 2
+#define CZI_DEBUG 1
 
 //============================================================================
 //   PRIVATE METHODS
@@ -4158,6 +4159,10 @@ bool zeiss_paint_region(
 
   return success;
 }
+      
+#ifdef CZI_DEBUG
+static GHashTable * zeiss_tileread_counts;
+#endif
 
 bool zeiss_tileread(
   openslide_t               * osr,
@@ -4187,7 +4192,7 @@ bool zeiss_tileread(
     return false;
   }
   
-  g_debug("zeiss_tileread::tile %ld", tile_desc->uid);
+  //g_debug("zeiss_tileread::tile %ld", tile_desc->uid);
 
   // Try to get tile data from cache
   struct _openslide_cache_entry *cache_entry;
@@ -4197,7 +4202,23 @@ bool zeiss_tileread(
                                     &cache_entry );
 
   if (!tile_data) {
-
+/*      
+#ifdef CZI_DEBUG
+    GHashTable * old_zeiss_tileread_counts = zeiss_tileread_counts;
+    zeiss_tileread_counts = g_hash_table_new(&g_int64_hash, &g_int64_equal);
+    
+    if old_zeiss_tileread_counts = zeiss_tileread_counts
+    int64_t * p_counts = (int64_t *)g_hash_table_lookup(zeiss_tileread_counts,
+                                                        &(tile_desc->uid));
+    
+    if (!p_counts)
+        g_hash_table_insert(zeiss_tileread_counts,
+                            &(tile_desc->uid),
+                            czi_new_S64(1, 0));
+    else
+        (*p_counts)++;
+#endif
+*/    
     // Load tile data from czi format (BGR_24, BGRA_32, ...)
     tile_data = _openslide_czi_get_level_tile_data( czi,
                                                     l,
@@ -4225,7 +4246,6 @@ bool zeiss_tileread(
 
     // Uncompress tile data if needed
     if (tile_desc->compression != UNCOMPRESSED) {
-      g_debug("Uncompressing tile");
       internal_tile_data = _openslide_czi_uncompress_tile( tile_desc,
                                                            tile_data,
                                                            data_size,
