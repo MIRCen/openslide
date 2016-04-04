@@ -253,7 +253,7 @@ void _openslide_set_bounds_props_from_grid(openslide_t *osr,
 
 
 /* Cache */
-#define _OPENSLIDE_USEFUL_CACHE_SIZE 1024*1024*32
+#define _OPENSLIDE_USEFUL_CACHE_SIZE 1024*1024*64
 
 struct _openslide_cache_entry;
 

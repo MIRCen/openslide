@@ -63,16 +63,19 @@ struct jxr_decoder {
 };
 
 
-struct jxr_decoder * openslide_jxr_decoder_new(GError ** error G_GNUC_UNUSED);
+struct jxr_decoder * openslide_jxr_decoder_new(GError ** error);
+
+bool _openslide_jxr_decoder_finalize(struct jxr_decoder * decoder,
+                                     GError            ** error);
 
 bool openslide_jxr_decoder_free(struct jxr_decoder * ptr,
-                                GError            ** error  G_GNUC_UNUSED);
+                                GError            ** error);
 
-bool _openslide_jxr_decode_buffer(const void       * data    G_GNUC_UNUSED,
-                                  uint32_t           datalen G_GNUC_UNUSED,
-                                  uint32_t         * dest    G_GNUC_UNUSED,
-                                  int32_t            w       G_GNUC_UNUSED,
-                                  int32_t            h       G_GNUC_UNUSED,
-                                  GError          ** err     G_GNUC_UNUSED);
+bool _openslide_jxr_decode_buffer(const void       * data,
+                                  uint32_t           datalen,
+                                  uint32_t         * dest,
+                                  int32_t            w,
+                                  int32_t            h,
+                                  GError          ** err);
 
 #endif

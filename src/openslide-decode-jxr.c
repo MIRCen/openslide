@@ -26,10 +26,10 @@
 
 #ifdef HAVE_LIBJXR
 
-static ERR PKImageEncode_WritePixels_OpenSlide( PKImageEncode* pIE,
-                                                U32 cLine,
-                                                U8* pbPixel,
-                                                U32 cbStride);
+static ERR PKImageEncode_WritePixels_OpenSlide(PKImageEncode* pIE,
+                                               U32 cLine,
+                                               U8* pbPixel,
+                                               U32 cbStride);
 
 static ERR PKImageEncode_Create_OpenSlide(PKImageEncode** ppIE);
 
@@ -260,8 +260,8 @@ Cleanup:
   return false;
 }
 
-static bool _openslide_jxr_decoder_finalize(struct jxr_decoder * decoder,
-                                            GError **error) {
+bool _openslide_jxr_decoder_finalize(struct jxr_decoder * decoder,
+                                     GError            ** error G_GNUC_UNUSED) {
 #ifdef HAVE_LIBJXR
   if(decoder) {
     // Release objects
@@ -284,7 +284,7 @@ static bool _openslide_jxr_decoder_finalize(struct jxr_decoder * decoder,
   return false;
 }
 
-struct jxr_decoder * openslide_jxr_decoder_new(GError ** error)
+struct jxr_decoder * openslide_jxr_decoder_new(GError ** error G_GNUC_UNUSED)
 {
   struct jxr_decoder * ptr = (struct jxr_decoder*) 
                                  g_slice_alloc0(
@@ -318,7 +318,8 @@ bool _openslide_jxr_decode_buffer(const void *data,
                                   int32_t w,
                                   int32_t h,
                                   GError **error) {
-
+#ifdef HAVE_LIBJXR
+    
   struct jxr_decoder * os_jxr_decoder = openslide_jxr_decoder_new(error);
   os_jxr_decoder->initialize(os_jxr_decoder, datalen, w, h, error);
   os_jxr_decoder->decode(os_jxr_decoder, data, dest, error);

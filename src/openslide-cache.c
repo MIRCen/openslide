@@ -74,7 +74,8 @@ static void possibly_evict(struct _openslide_cache *cache, int incoming_size) {
 
   int size = cache->total_size + incoming_size;
   int target = cache->capacity;
-
+  // g_debug("EVICT: try to evict. size: %d, total size: %d, incoming size: %d, capacity: %d",
+  //        size, cache->total_size, incoming_size, cache->capacity);
   while(size > target) {
     // get key of last element
     struct _openslide_cache_value *value = g_queue_peek_tail(cache->list);
@@ -83,7 +84,8 @@ static void possibly_evict(struct _openslide_cache *cache, int incoming_size) {
     }
     struct _openslide_cache_key *key = value->key;
 
-    //g_debug("EVICT: size: %d", value->entry->size);
+    // g_debug("EVICT: size: %d, plane: %d, x: %d, y: %d", 
+    //        value->entry->size, key->plane, key->x, key->y);
 
     size -= value->entry->size;
 
@@ -133,6 +135,7 @@ static void hash_destroy_value(gpointer data) {
 }
 
 struct _openslide_cache *_openslide_cache_create(int capacity_in_bytes) {
+  //g_debug("_openslide_cache_create");
   struct _openslide_cache *cache = g_slice_new0(struct _openslide_cache);
 
   // init mutex
@@ -154,6 +157,7 @@ struct _openslide_cache *_openslide_cache_create(int capacity_in_bytes) {
 }
 
 void _openslide_cache_destroy(struct _openslide_cache *cache) {
+  //g_debug("_openslide_cache_destroy");
   // clear hashtable (auto-deletes all data)
   g_mutex_lock(cache->mutex);
   g_hash_table_unref(cache->hashtable);
@@ -212,7 +216,10 @@ void _openslide_cache_put(struct _openslide_cache *cache,
 
   // don't try to put anything in the cache that cannot possibly fit
   if (size_in_bytes > cache->capacity) {
-    //g_debug("refused %p", entry);
+    // g_debug("refused %p, size of %d bytes to large for cache capacity of %d bytes",
+    //         entry,
+    //         size_in_bytes,
+    //         cache->capacity);
     g_mutex_unlock(cache->mutex);
     _openslide_performance_warn_once(&cache->warned_overlarge_entry,
                                      "Rejecting overlarge cache entry of "
