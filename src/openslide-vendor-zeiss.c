@@ -965,7 +965,7 @@ bool czi_add_tile(
   // g_debug( "czi_add_tile" );
   g_assert( czi );
   g_assert( tile );
-  struct _czi_level * level;
+  struct _czi_level * level = NULL;
   struct _czi_dimension * dimension;
   gpointer has_key;
   GList * list_keys, * current_key;
@@ -3351,7 +3351,9 @@ static const struct _openslide_ops _openslide_ops_zeiss = {
 //              ZEISS VENDOR - PRIVATE METHODS : DECLARATIONS
 //
 //============================================================================
+#ifdef CZI_DEBUG
 static void zeiss_debug_display_tile_counts( openslide_t * osr, GHashTable * tilesinfo, bool details );
+#endif
 static bool zeiss_check( _openslide_czi * czi, GError ** err );
 static bool zeiss_set_properties( openslide_t * osr, _openslide_czi * czi, GError ** err );
 static bool zeiss_set_levels( openslide_t * osr, _openslide_czi * czi, GError ** err );
@@ -3493,7 +3495,7 @@ struct _openslide_ops {
 //              ZEISS VENDOR - PRIVATE METHODS : DEFINITIONS
 //
 //============================================================================
-
+#ifdef CZI_DEBUG
 void zeiss_debug_display_tile_counts(openslide_t * osr,
                                      GHashTable  * tile_infos,
                                      bool details){
@@ -3545,6 +3547,7 @@ void zeiss_debug_display_tile_counts(openslide_t * osr,
             tiles_sum,
             (float)tiles_sum / (float)tiles_count);
 }
+#endif
 
 bool zeiss_check(
   _openslide_czi  * czi,

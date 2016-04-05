@@ -52,6 +52,8 @@ struct _GRealArray
   GDestroyNotify clear_func;
 };
 
+#define MIN_ARRAY_SIZE  16
+
 typedef struct _GRealPtrArray  GRealPtrArray;
 
 /**
@@ -83,6 +85,20 @@ g_int64_hash (gconstpointer v)
    return (guint) *(const gint64*) v;
 }
 
+/* Returns the smallest power of 2 greater than n, or n if
+ * such power does not fit in a guint
+ */
+static guint
+g_nearest_pow (gint num)
+{
+  guint n = 1;
+
+  while (n < num && n > 0)
+    n <<= 1;
+
+  return n ? n : num;
+}
+
 /**
  * g_ptr_array_set_free_func:
  * @array: A #GPtrArray
@@ -104,6 +120,61 @@ g_ptr_array_set_free_func (GPtrArray      *array,
   g_return_if_fail (array);
 
   rarray->element_free_func = element_free_func;
+}
+
+static void
+g_ptr_array_maybe_expand (GRealPtrArray *array,
+              gint           len)
+{
+  if ((array->len + len) > array->alloc)
+    {
+      guint old_alloc = array->alloc;
+      array->alloc = g_nearest_pow (array->len + len);
+      array->alloc = MAX (array->alloc, MIN_ARRAY_SIZE);
+      array->pdata = g_realloc (array->pdata, sizeof (gpointer) * array->alloc);
+      if (G_UNLIKELY (g_mem_gc_friendly))
+        for ( ; old_alloc < array->alloc; old_alloc++)
+          array->pdata [old_alloc] = NULL;
+    }
+}
+
+/**
+ * g_ptr_array_sized_new:
+ * @reserved_size: number of pointers preallocated.
+ * @Returns: the new #GPtrArray.
+ *
+ * Creates a new #GPtrArray with @reserved_size pointers preallocated
+ * and a reference count of 1. This avoids frequent reallocation, if
+ * you are going to add many pointers to the array. Note however that
+ * the size of the array is still 0.
+ **/
+GPtrArray*  
+g_ptr_array_sized_new (guint reserved_size)
+{
+  GRealPtrArray *array = g_slice_new (GRealPtrArray);
+
+  array->pdata = NULL;
+  array->len = 0;
+  array->alloc = 0;
+  array->ref_count = 1;
+  array->element_free_func = NULL;
+
+  if (reserved_size != 0)
+    g_ptr_array_maybe_expand (array, reserved_size);
+
+  return (GPtrArray*) array;  
+}
+
+/**
+ * g_ptr_array_new:
+ * @Returns: the new #GPtrArray.
+ *
+ * Creates a new #GPtrArray with a reference count of 1.
+ **/
+GPtrArray*
+g_ptr_array_new (void)
+{
+  return g_ptr_array_sized_new (0);
 }
 
 /**
@@ -436,63 +507,92 @@ void g_checksum_free(GChecksum *ctx)
 // Previous patches to 2.14
 #if GLIB_VERSION < 21400
 
+#define HASH_TABLE_MIN_SIZE 11
+
+typedef struct _GHashNode      GHashNode;
+
+struct _GHashNode
+{
+  gpointer   key;
+  gpointer   value;
+  GHashNode *next;
+  guint      key_hash;
+};
+
 struct _GHashTable
 {
   gint             size;
-  gint             mod;
-  guint            mask;
   gint             nnodes;
-  gint             noccupied;  /* nnodes + tombstones */
-
-  gpointer        *keys;
-  guint           *hashes;
-  gpointer        *values;
-
+  GHashNode      **nodes;
   GHashFunc        hash_func;
   GEqualFunc       key_equal_func;
-  gint             ref_count;
-#ifndef G_DISABLE_ASSERT
-  /*
-   * Tracks the structure of the hash table, not its contents: is only
-   * incremented when a node is added or removed (is not incremented
-   * when the key or data of a node is modified).
-   */
-  int              version;
-#endif
+  volatile gint    ref_count;
   GDestroyNotify   key_destroy_func;
   GDestroyNotify   value_destroy_func;
 };
 
 /**
- * g_hash_table_get_values:
- * @hash_table: a #GHashTable
+ * g_hash_table_new:
+ * @hash_func: a function to create a hash value from a key.
+ *   Hash values are used to determine where keys are stored within the
+ *   #GHashTable data structure. The g_direct_hash(), g_int_hash() and 
+ *   g_str_hash() functions are provided for some common types of keys. 
+ *   If hash_func is %NULL, g_direct_hash() is used.
+ * @key_equal_func: a function to check two keys for equality.  This is
+ *   used when looking up keys in the #GHashTable.  The g_direct_equal(),
+ *   g_int_equal() and g_str_equal() functions are provided for the most
+ *   common types of keys. If @key_equal_func is %NULL, keys are compared
+ *   directly in a similar fashion to g_direct_equal(), but without the
+ *   overhead of a function call.
  *
- * Retrieves every value inside @hash_table. The returned data
- * is valid until @hash_table is modified.
- *
- * Returns: a #GList containing all the values inside the hash
- *     table. The content of the list is owned by the hash table and
- *     should not be modified or freed. Use g_list_free() when done
- *     using the list.
- *
- * Since: 2.14
- */
-GList *
-g_hash_table_get_values (GHashTable *hash_table)
+ * Creates a new #GHashTable with a reference count of 1.
+ * 
+ * Return value: a new #GHashTable.
+ **/
+GHashTable*
+g_hash_table_new (GHashFunc    hash_func,
+          GEqualFunc   key_equal_func)
 {
-  gint i;
-  GList *retval;
+  return g_hash_table_new_full (hash_func, key_equal_func, NULL, NULL);
+}
 
-  g_return_val_if_fail (hash_table != NULL, NULL);
 
-  retval = NULL;
-  for (i = 0; i < hash_table->size; i++)
-    {
-      if (HASH_IS_REAL (hash_table->hashes[i]))
-        retval = g_list_prepend (retval, hash_table->values[i]);
-    }
-
-  return retval;
+/**
+ * g_hash_table_new_full:
+ * @hash_func: a function to create a hash value from a key.
+ * @key_equal_func: a function to check two keys for equality.
+ * @key_destroy_func: a function to free the memory allocated for the key 
+ *   used when removing the entry from the #GHashTable or %NULL if you 
+ *   don't want to supply such a function.
+ * @value_destroy_func: a function to free the memory allocated for the 
+ *   value used when removing the entry from the #GHashTable or %NULL if 
+ *   you don't want to supply such a function.
+ * 
+ * Creates a new #GHashTable like g_hash_table_new() with a reference count
+ * of 1 and allows to specify functions to free the memory allocated for the
+ * key and value that get called when removing the entry from the #GHashTable.
+ * 
+ * Return value: a new #GHashTable.
+ **/
+GHashTable*
+g_hash_table_new_full (GHashFunc       hash_func,
+               GEqualFunc      key_equal_func,
+               GDestroyNotify  key_destroy_func,
+               GDestroyNotify  value_destroy_func)
+{
+  GHashTable *hash_table;
+  
+  hash_table = g_slice_new (GHashTable);
+  hash_table->size               = HASH_TABLE_MIN_SIZE;
+  hash_table->nnodes             = 0;
+  hash_table->hash_func          = hash_func ? hash_func : g_direct_hash;
+  hash_table->key_equal_func     = key_equal_func;
+  hash_table->ref_count          = 1;
+  hash_table->key_destroy_func   = key_destroy_func;
+  hash_table->value_destroy_func = value_destroy_func;
+  hash_table->nodes              = g_new0 (GHashNode*, hash_table->size);
+  
+  return hash_table;
 }
 
 /**
@@ -500,30 +600,60 @@ g_hash_table_get_values (GHashTable *hash_table)
  * @hash_table: a #GHashTable
  *
  * Retrieves every key inside @hash_table. The returned data is valid
- * until changes to the hash release those keys.
+ * until @hash_table is modified.
  *
- * Returns: a #GList containing all the keys inside the hash
- *     table. The content of the list is owned by the hash table and
- *     should not be modified or freed. Use g_list_free() when done
- *     using the list.
+ * Return value: a #GList containing all the keys inside the hash
+ *   table. The content of the list is owned by the hash table and
+ *   should not be modified or freed. Use g_list_free() when done
+ *   using the list.
  *
  * Since: 2.14
  */
 GList *
 g_hash_table_get_keys (GHashTable *hash_table)
 {
+  GHashNode *node;
   gint i;
   GList *retval;
-
+  
   g_return_val_if_fail (hash_table != NULL, NULL);
-
+  
   retval = NULL;
   for (i = 0; i < hash_table->size; i++)
-    {
-      if (HASH_IS_REAL (hash_table->hashes[i]))
-        retval = g_list_prepend (retval, hash_table->keys[i]);
-    }
+    for (node = hash_table->nodes[i]; node; node = node->next)
+      retval = g_list_prepend (retval, node->key);
+  
+  return retval;
+}
 
+/**
+ * g_hash_table_get_values:
+ * @hash_table: a #GHashTable
+ *
+ * Retrieves every value inside @hash_table. The returned data is
+ * valid until @hash_table is modified.
+ *
+ * Return value: a #GList containing all the values inside the hash
+ *   table. The content of the list is owned by the hash table and
+ *   should not be modified or freed. Use g_list_free() when done
+ *   using the list.
+ *
+ * Since: 2.14
+ */
+GList *
+g_hash_table_get_values (GHashTable *hash_table)
+{
+  GHashNode *node;
+  gint i;
+  GList *retval;
+  
+  g_return_val_if_fail (hash_table != NULL, NULL);
+  
+  retval = NULL;
+  for (i = 0; i < hash_table->size; i++)
+    for (node = hash_table->nodes[i]; node; node = node->next)
+      retval = g_list_prepend (retval, node->value);
+  
   return retval;
 }
 
