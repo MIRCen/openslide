@@ -26,8 +26,8 @@
  *          - OPENSLIDE API DECLARATIONS                  key:DRIVER-API-DECL
  *          - PRIVATE METHODS DECLARATIONS                key:DRIVER-PRI-DECL
  *       2) DEFINITIONS
- *          - PRIVATE METHODS DECLARATIONS                key:DRIVER-API-DEF
- *          - OPENSLIDE API DEFINITIONS                   key:DRIVER-PRI-DEF
+ *          - PRIVATE METHODS DEFINITIONS                 key:DRIVER-PRI-DEF
+ *          - OPENSLIDE API DEFINITIONS                   key:DRIVER-API-DEF
  *
  * Structure parsing public methods are named      _openslide_czi_*
  * Structure parsing public structures are named   struct _openslide_czi_*
@@ -50,6 +50,8 @@
 // specify which is needed for ZISRAW ".h", ZISRAW ".c", ZEISS ".c"
 #include <glib.h>
 #include <math.h>
+#include <limits.h>                                      // type limits
+#include <complex.h>                                     // complex float data type
 #include <stdint.h>                                      // c99 int data types
 #include <stdbool.h>                                                   // bool
 #include <stdio.h>                                            // file handling
@@ -64,6 +66,7 @@
 #define CZI_DISPLAY_INDENT          2
 //#define CZI_DEBUG                   1
 //#define CZI_WRITE_TILE_DATA         1
+//#define CZI_WRITE_XML               1
 
 // key:PARSING-TOP
 //////////////////////////////////////////////////////////////////////////////
@@ -228,9 +231,9 @@ static bool               _openslide_czi_free_level_tile_data( _openslide_czi * 
 static void               _openslide_czi_free_list_tiles( GList * list );
 static uint8_t *          _openslide_czi_uncompress_tile( struct _openslide_czi_tile_descriptor * tile_desc, uint8_t * data, int32_t data_size, int32_t * uncompressed_data_size, GError ** err);
 static uint8_t *          _openslide_czi_load_tile( _openslide_czi * czi, int32_t level, int64_t uid, int32_t * buffer_size, GError **err );
-static void               _openslide_czi_pixel_copy( uint8_t * src, uint8_t * dest, int8_t src_pixel_type_size, int8_t dest_pixel_type_size, uint8_t default_value );
 static uint8_t *          _openslide_czi_data_convert_to_rgba32( enum czi_pixel_t pixel_type, uint8_t * tile_data, int32_t tile_data_size, int32_t * converted_tile_data_size, GError ** err);
 static uint8_t            _openslide_czi_pixel_type_size( enum czi_pixel_t );
+static uint8_t            _openslide_czi_pixel_type_channel_count( enum czi_pixel_t type );
 static bool               _openslide_czi_destroy_tile( _openslide_czi * czi, int32_t level, int64_t uid, GError **err ) G_GNUC_UNUSED;
 
 // Metadata
@@ -279,6 +282,27 @@ static bool      _openslide_get_resolution( openslide_t * osr, double * mppx, do
     if( prefix ) g_prefix_error( err, prefix );                              \
     return false;                                                            \
   } else (void)0
+
+
+//============================================================================
+//   PRIVATE ENUMS
+//============================================================================
+
+enum _czi_data_t {
+  DATA_TYPE_UNKNOWN       = -1,
+  U8_TYPE                 = 0,
+  U16_TYPE                = 1,
+  U32_TYPE                = 2,
+  U64_TYPE                = 3,
+  FLOAT_TYPE              = 4,
+  CFLOAT_TYPE             = 5
+};
+
+
+enum _czi_accumulator_t {
+  MIN_ACCUMULATOR         = 0,
+  MAX_ACCUMULATOR         = 1
+};
 
 //============================================================================
 //   PRIVATE STRUCTURES
@@ -433,6 +457,108 @@ struct _czi_attachment {
   uint8_t             * data;
 };
 
+struct _czi_pixel_dynamic_info;
+/*
+typedef void (*_czi_pixel_dynamic_info_update_min_max_t)(
+                    struct _czi_pixel_dynamic_info    * di,
+                    uint8_t                           * buffer);
+*/
+
+// Structure used to accumulate data
+struct _czi_accumulator {
+  //--- methods ----------------------------------------------------------------
+  void (*accumulate)(struct _czi_accumulator              * ca,
+                     uint64_t                               pos,
+                     uint8_t                              * buffer);
+
+  //--- attributes -------------------------------------------------------------  
+  enum _czi_data_t                                          data_type;
+  uint8_t                                                   data_type_size;
+  uint64_t                                                  data_count;
+  uint8_t                                                 * data;
+};
+
+// Structure used to declare static accumulator functions
+struct _czi_accumulator_func {
+  void (*accumulate)(struct _czi_accumulator              * ca,
+                     uint64_t                               pos,
+                     uint8_t                              * buffer);
+};
+
+struct _czi_rescale_info {
+  //--- methods ----------------------------------------------------------------
+
+  //--- attributes -------------------------------------------------------------
+  double                                                    shift;
+  double                                                    slope;
+};
+
+struct _czi_rescale_info_func {
+  //--- methods ----------------------------------------------------------------
+  struct _czi_rescale_info * (*rescale_info)(
+                     struct _czi_pixel_dynamic_info       * cpdi,
+                     GError                              ** err);
+  
+  //--- attributes -------------------------------------------------------------
+};
+
+// Structure used to update dynamic information (minimum and maximum)
+// from a buffer.
+struct _czi_pixel_dynamic_info {
+  //--- methods ----------------------------------------------------------------
+  void (*update)(
+                     struct _czi_pixel_dynamic_info       * cpdi,
+                     uint8_t                              * buffer,
+                     uint64_t                               buffer_size,
+                     GError                              ** err);
+/*  
+  struct _czi_rescale_info * (*rescale_info)(
+                     struct _czi_pixel_dynamic_info       * cpdi,
+                     GError                              ** err);
+*/
+  //--- attributes -------------------------------------------------------------
+  enum czi_pixel_t                                          type;
+  uint8_t                                                 * min_per_channel; 
+  uint8_t                                                 * max_per_channel;
+  
+  // For acceleration purpose
+  uint8_t                                                   channel_count;
+  uint8_t                                                   channel_size;
+}; 
+
+// Structure used to convert a buffer from a channel type to another.
+// It uses dynamic information to rescale dynamic of the data if needed (i.e.
+// when destination type is less precise than source type).
+struct _czi_channel_converter {
+  //--- methods ----------------------------------------------------------------
+  void (*convert)(const struct _czi_channel_converter     * ccc,
+                  const struct _czi_rescale_info          * cri,
+                  uint8_t                                 * src_buffer,
+                  uint8_t                                 * dest_buffer,
+                  GError                                 ** err);
+  
+  //--- attributes -------------------------------------------------------------
+  enum _czi_data_t   src_channel_type;
+  enum _czi_data_t   dest_channel_type;
+};
+
+// Structure used to convert a buffer from a pixel type to another.
+// It uses dynamic information to rescale dynamic of the data if needed (i.e.
+// when destination type is less precise than source type).
+struct _czi_pixel_converter {
+  //--- methods ----------------------------------------------------------------
+  void (*convert)(const struct _czi_pixel_converter       * cpc,
+                  const struct _czi_rescale_info          * cri,
+                  uint8_t                                 * src_buffer,
+                  uint8_t                                 * dest_buffer,
+                  GError                                 ** err);
+  
+  //--- attributes -------------------------------------------------------------
+  enum czi_pixel_t      src_pixel_type;
+  enum czi_pixel_t      dest_pixel_type;
+};
+
+
 //============================================================================
 //   PRIVATE STRINGS
 //============================================================================
@@ -573,24 +699,31 @@ static struct _czi_metadata                     * czi_new_metadata( struct _czi 
 /*TODO*/static struct _czi_attachment           * czi_new_attachment( struct _czi * czi, GError ** err ) G_GNUC_UNUSED;
 static struct _czi_tile                         * czi_new_tile( GError ** err );
 static struct _czi_dimension                    * czi_new_dimension( struct _czi_tile * tile, GError ** err );
+static int16_t                                  * czi_new_S16( int16_t integer, GError ** err ) G_GNUC_UNUSED;
 static int32_t                                  * czi_new_S32( int32_t integer, GError ** err );
 static int64_t                                  * czi_new_S64( int64_t integer, GError ** err );
 static struct _openslide_czi_tile_descriptor    * czi_new_tile_descriptor( struct _czi_tile * tile, GError ** err );
+static struct _czi_pixel_dynamic_info           * czi_new_pixel_dynamic_info(enum czi_pixel_t pixel_type, GError ** err );
+static struct _czi_accumulator                  * czi_new_accumulator(enum _czi_accumulator_t accumulator_type, enum _czi_data_t data_type, uint64_t data_count, GError ** err );
+static struct _czi_rescale_info                 * czi_new_rescale_info(GError ** err G_GNUC_UNUSED);
 
 //--- free -------------------------------------------------------------------
-static void czi_free(              struct _czi              * ptr );
-static void czi_free_source(       struct _czi_source       * ptr );
-static void czi_free_file_header(  struct _czi_file_header  * ptr );
-static void czi_free_level(        struct _czi_level        * ptr );
-static void czi_free_metadata(     struct _czi_metadata     * ptr );
-static void czi_free_attachment(   struct _czi_attachment   * ptr ) G_GNUC_UNUSED;
-static void czi_free_tile(         struct _czi_tile         * ptr );
-static void czi_free_dimension(    struct _czi_dimension    * ptr );
-static void czi_free_roi(          struct _czi_roi          * ptr );
-static void czi_free_S32(          int32_t                  * ptr );
-static void czi_free_S64(          int64_t                  * ptr );
-static void czi_free_tile_descriptor( struct _openslide_czi_tile_descriptor * ptr );
-
+static void czi_free(                      struct _czi                           * ptr );
+static void czi_free_source(               struct _czi_source                    * ptr );
+static void czi_free_file_header(          struct _czi_file_header               * ptr );
+static void czi_free_level(                struct _czi_level                     * ptr );
+static void czi_free_metadata(             struct _czi_metadata                  * ptr );
+static void czi_free_attachment(           struct _czi_attachment                * ptr ) G_GNUC_UNUSED;
+static void czi_free_tile(                 struct _czi_tile                      * ptr );
+static void czi_free_dimension(            struct _czi_dimension                 * ptr );
+static void czi_free_roi(                  struct _czi_roi                       * ptr );
+static void czi_free_S16(                  int16_t                               * ptr ) G_GNUC_UNUSED;
+static void czi_free_S32(                  int32_t                               * ptr );
+static void czi_free_S64(                  int64_t                               * ptr );
+static void czi_free_tile_descriptor(      struct _openslide_czi_tile_descriptor * ptr );
+static void czi_free_pixel_dynamic_info(   struct _czi_pixel_dynamic_info        * ptr );
+static void czi_free_accumulator(          struct _czi_accumulator               * ptr );
+static void czi_free_rescale_info(         struct _czi_rescale_info      * ptr );
 
 //--- read -------------------------------------------------------------------
 static bool czi_parse_directory(  struct _czi_source * source, struct _czi * czi,                     GError ** err );
@@ -621,7 +754,6 @@ static void czi_display_tile(                 struct _czi_tile                  
 static void czi_display_dimension(            struct _czi_dimension                 * ptr, uint16_t alignment ) G_GNUC_UNUSED;
 static void czi_display_tile_descriptor(      struct _openslide_czi_tile_descriptor * ptr, uint16_t alignment ) G_GNUC_UNUSED;
 
-
 //--- navigate in structure --------------------------------------------------
 static bool czi_read_next_segment_header(
   struct _czi_source          * source,
@@ -644,10 +776,384 @@ static bool czi_is_zisraw(
   GError                     ** err
 );
 
+//--- accumulator function -----------------------------------------------------
+static int32_t czi_accumulator_func_uid(
+                        enum _czi_accumulator_t                type,
+                        enum _czi_data_t                       data_type);
+
+static GHashTable * czi_accumulator_func_hash_table(
+                        GError                              ** err);
+
+static const struct _czi_accumulator_func * czi_get_accumulator_func(
+                        enum _czi_accumulator_t                type,
+                        enum _czi_data_t                       data_type);
+
+//--- accumulator --------------------------------------------------------------
+static void czi_buffer_accumulate(
+                        enum _czi_accumulator_t                accumulator_type,
+                        uint8_t                              * buffer,
+                        uint8_t                              * result,
+                        enum _czi_data_t                       data_type,
+                        uint64_t                               data_count,
+                        GError                              ** err);
+
+//--- minimum ------------------------------------------------------------------
+static void czi_accumulator_min_accumulate_U8(
+                        struct _czi_accumulator              * ac,
+                        uint64_t                               pos,
+                        uint8_t                              * buffer
+);
+
+static void czi_accumulator_min_accumulate_U16(
+                        struct _czi_accumulator              * ac,
+                        uint64_t                               pos,
+                        uint8_t                              * buffer
+);
+
+static void czi_accumulator_min_accumulate_U32(
+                        struct _czi_accumulator              * ac,
+                        uint64_t                               pos,
+                        uint8_t                              * buffer
+);
+
+static void czi_accumulator_min_accumulate_U64(
+                        struct _czi_accumulator              * ac,
+                        uint64_t                               pos,
+                        uint8_t                              * buffer
+);
+
+static void czi_accumulator_min_accumulate_FLOAT(
+                        struct _czi_accumulator              * ac,
+                        uint64_t                               pos,
+                        uint8_t                              * buffer
+);
+
+static void czi_accumulator_min_accumulate_CFLOAT(
+                        struct _czi_accumulator              * ac,
+                        uint64_t                               pos,
+                        uint8_t                              * buffer
+);
+
+//--- maximum ------------------------------------------------------------------
+static void czi_accumulator_max_accumulate_U8(
+                        struct _czi_accumulator              * ac,
+                        uint64_t                               pos,
+                        uint8_t                              * buffer
+);
+
+static void czi_accumulator_max_accumulate_U16(
+                        struct _czi_accumulator              * ac,
+                        uint64_t                               pos,
+                        uint8_t                              * buffer
+);
+
+static void czi_accumulator_max_accumulate_U32(
+                        struct _czi_accumulator              * ac,
+                        uint64_t                               pos,
+                        uint8_t                              * buffer
+);
+
+static void czi_accumulator_max_accumulate_U64(
+                        struct _czi_accumulator              * ac,
+                        uint64_t                               pos,
+                        uint8_t                              * buffer
+);
+
+static void czi_accumulator_max_accumulate_FLOAT(
+                        struct _czi_accumulator              * ac,
+                        uint64_t                               pos,
+                        uint8_t                              * buffer
+);
+
+static void czi_accumulator_max_accumulate_CFLOAT(
+                        struct _czi_accumulator              * ac,
+                        uint64_t                               pos,
+                        uint8_t                              * buffer
+);
+
+//--- pixel dynamic info -------------------------------------------------------
+//static int32_t czi_pixel_dynamic_info_updater_uid(
+//                        enum czi_pixel_t                       type);
+
+static void czi_pixel_dynamic_info_update(
+                        struct _czi_pixel_dynamic_info       * pdi,
+                        uint8_t                              * buffer,
+                        uint64_t                               buffer_size,
+                        GError                              ** err);
+
+/*
+static void czi_pixel_dynamic_info_update_min_max_multichannel(
+                        struct _czi_pixel_dynamic_info       * pdi,
+                        uint8_t                              * buffer
+);*/
+
+//static GHashTable * czi_pixel_dynamic_info_updater_hash_table(
+//                        GError                              ** err);
+
+//--- pixel dynamic info update min max ----------------------------------------
+/*
+void czi_pixel_dynamic_info_update_min_max_U8(
+                        struct _czi_pixel_dynamic_info       * pdi,
+                        uint8_t                              * buffer
+);
+
+void czi_pixel_dynamic_info_update_min_max_U16(
+                        struct _czi_pixel_dynamic_info       * pdi,
+                        uint8_t                              * buffer
+);
+
+void czi_pixel_dynamic_info_update_min_max_U32(
+                        struct _czi_pixel_dynamic_info       * pdi,
+                        uint8_t                              * buffer
+);
+
+void czi_pixel_dynamic_info_update_min_max_U64(
+                        struct _czi_pixel_dynamic_info       * pdi,
+                        uint8_t                              * buffer
+);
+
+void czi_pixel_dynamic_info_update_min_max_FLOAT(
+                        struct _czi_pixel_dynamic_info       * pdi,
+                        uint8_t                              * buffer
+);
+
+void czi_pixel_dynamic_info_update_min_max_CFLOAT(
+                        struct _czi_pixel_dynamic_info       * pdi,
+                        uint8_t                              * buffer
+);
+*/
+
+//--- converter ----------------------------------------------------------------
+static int32_t czi_uid_S32(
+                        uint8_t                                b0,
+                        uint8_t                                b1,
+                        uint8_t                                b2,
+                        uint8_t                                b3
+);
+
+//--- buffer convert -----------------------------------------------------------
+static void czi_buffer_convert_U8_to_U8(
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        double                                 shift,
+                        double                                 scale
+);
+
+static void czi_buffer_convert_U16_to_U8(
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        double                                 shift,
+                        double                                 scale
+);
+
+static void czi_buffer_convert_U32_to_U8(
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        double                                 shift,
+                        double                                 scale
+);
+
+static void czi_buffer_convert_U64_to_U8(
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        double                                 shift,
+                        double                                 scale
+);
+
+static void czi_buffer_convert_FLOAT_to_U8(
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        double                                 shift,
+                        double                                 scale
+);
+
+static void czi_buffer_convert_CFLOAT_to_U8(
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        double                                 shift,
+                        double                                 scale
+);
+
+//--- typed convert ------------------------------------------------------------
+static uint8_t czi_convert_U8_to_U8(
+                        uint8_t                                value,
+                        double                                 shift,
+                        double                                 scale
+) G_GNUC_UNUSED;
+
+static uint8_t czi_convert_U16_to_U8(
+                        uint16_t                               value,
+                        double                                 shift,
+                        double                                 scale
+) G_GNUC_UNUSED;
+
+static uint8_t czi_convert_U32_to_U8(
+                        uint32_t                               value,
+                        double                                 shift,
+                        double                                 scale
+) G_GNUC_UNUSED;
+
+static uint8_t czi_convert_U64_to_U8(
+                        uint64_t                               value,
+                        double                                 shift,
+                        double                                 scale
+) G_GNUC_UNUSED;
+
+static uint8_t czi_convert_FLOAT_to_U8(
+                        float                                  value,
+                        double                                 shift,
+                        double                                 scale
+) G_GNUC_UNUSED;
+
+static uint8_t czi_convert_CFLOAT_to_U8(
+                        complex float                          value,
+                        double                                 shift,
+                        double                                 scale
+) G_GNUC_UNUSED;
+
+//--- data type ----------------------------------------------------------------
+static uint8_t czi_data_type_size(
+                        enum _czi_data_t                       type);
+
+static enum _czi_data_t czi_data_type(
+                        enum czi_pixel_t                       pixel_type);
+
+//--- channel converter --------------------------------------------------------
+static int32_t czi_channel_converter_uid(
+                        enum _czi_data_t                       src_type,
+                        enum _czi_data_t                       dest_type);
+
+static const struct _czi_channel_converter * czi_get_channel_converter(
+                        enum _czi_data_t                       src_type,
+                        enum _czi_data_t                       dest_type)
+G_GNUC_UNUSED;
+
+static GHashTable * czi_channel_converter_hash_table(
+                        GError                              ** err);
+
+//--- channel conversion -------------------------------------------------------
+static void czi_channel_convert_U8_to_U8(
+                        const struct _czi_channel_converter  * cpc,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err);
+
+static void czi_channel_convert_U16_to_U8(
+                        const struct _czi_channel_converter  * cpc,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err);
+
+static void czi_channel_convert_U32_to_U8(
+                        const struct _czi_channel_converter  * cpc,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err);
+
+static void czi_channel_convert_U64_to_U8(
+                        const struct _czi_channel_converter  * cpc,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err);
+
+static void czi_channel_convert_FLOAT_to_U8(
+                        const struct _czi_channel_converter  * cpc,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err);
+
+static void czi_channel_convert_CFLOAT_to_U8(
+                        const struct _czi_channel_converter  * cpc,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err);
+//--- rescale info func --------------------------------------------------------
+static GHashTable * czi_rescale_info_func_hash_table(GError ** err);
+
+static uint32_t czi_rescale_info_func_uid(
+                        enum _czi_data_t                      src_type,
+                        enum _czi_data_t                      dest_type);
+
+static const struct _czi_rescale_info_func * czi_get_rescale_info_func(
+                        enum _czi_data_t                      src_type,
+                        enum _czi_data_t                      dest_type);
+
+//--- rescale info -------------------------------------------------------------
+static struct _czi_rescale_info * czi_rescale_info_U16_to_U8(
+                        struct _czi_pixel_dynamic_info      * cpdi,
+                        GError                             ** err);
+
+static struct _czi_rescale_info * czi_rescale_info_FLOAT_to_U8(
+                        struct _czi_pixel_dynamic_info      * cpdi,
+                        GError                             ** err);
+
+//--- pixel --------------------------------------------------------------------
+
+//--- pixel converter ----------------------------------------------------------
+static GHashTable * czi_pixel_converter_hash_table(GError  ** err);
+
+static uint32_t czi_pixel_converter_uid(
+                        enum czi_pixel_t                      src_type,
+                        enum czi_pixel_t                      dest_type);
+    
+static const struct _czi_pixel_converter * czi_get_pixel_converter(
+                        enum czi_pixel_t                      src_type,
+                        enum czi_pixel_t                      dest_type);
+
+//--- pixel conversion ---------------------------------------------------------
+static void czi_pixel_convert_multichannel(
+                        const struct _czi_channel_converter  * cpc,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        uint8_t                                channel_count,
+                        GError                              ** err);
+
+static void czi_pixel_convert_BGR_24_to_BGRA_32(
+                        const struct _czi_pixel_converter    * cpc,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err);
+
+static void czi_pixel_convert_BGRA_32_to_BGRA_32(
+                        const struct _czi_pixel_converter    * cpc,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err);
+
+static void czi_pixel_convert_BGR_48_to_BGRA_32(
+                        const struct _czi_pixel_converter    * cpc,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err);
+
+static void czi_pixel_convert_BGR_96_FLOAT_to_BGRA_32(
+                        const struct _czi_pixel_converter    * cpc,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err);
+
+static void czi_pixel_convert_BGR_192_COMPLEX_FLOAT_to_BGRA_32(
+                        const struct _czi_pixel_converter    * cpc,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err);
+
 // key:PARSING-PUB-DEF
 //============================================================================
 //
-//                        PRIVATE API DEFINITIONS
+//                        PUBLIC API DEFINITIONS
 //
 //============================================================================
 
@@ -932,7 +1438,7 @@ bool czi_add_file_header(
     GError                       ** err         G_GNUC_UNUSED
 )
 {
-    g_debug( "czi_add_file_header" );
+    //g_debug( "czi_add_file_header" );
     g_assert( czi );
     g_assert( header );
     
@@ -1525,6 +2031,18 @@ struct _czi_dimension * czi_new_dimension( struct _czi_tile * tile, GError ** er
   return dimension;
 }
 
+int16_t * czi_new_S16( int16_t shortint, GError ** err )
+{
+  int16_t * value = (int16_t*) g_slice_alloc0( sizeof(int16_t) );
+  if( !value ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to allocate %ld bytes", sizeof(int16_t) );
+    return NULL;
+  }
+  *value = shortint;
+  return value;
+}
+
 int32_t * czi_new_S32( int32_t integer, GError ** err )
 {
   int32_t * value = (int32_t*) g_slice_alloc0( sizeof(int32_t) );
@@ -1587,6 +2105,88 @@ struct _openslide_czi_tile_descriptor * czi_new_tile_descriptor(
   tile_desc->start_y = dim->start;
 
   return tile_desc;
+
+}
+
+struct _czi_pixel_dynamic_info * czi_new_pixel_dynamic_info(
+                    enum czi_pixel_t pixel_type, 
+                    GError ** err
+) {
+    struct _czi_pixel_dynamic_info * pdi;
+    
+    pdi = (struct _czi_pixel_dynamic_info *) g_slice_alloc0( 
+              sizeof(struct _czi_pixel_dynamic_info)
+          );
+    
+    enum _czi_data_t channel_type = czi_data_type(pixel_type);
+    
+    pdi->type = pixel_type;
+    pdi->channel_count = _openslide_czi_pixel_type_channel_count(pixel_type);
+    pdi->channel_size = czi_data_type_size(channel_type);
+    
+    // Set function to update dynamic information
+    pdi->update = czi_pixel_dynamic_info_update;
+    
+    pdi->min_per_channel = g_slice_alloc0(pdi->channel_count
+                                        * pdi->channel_size);
+    
+    pdi->max_per_channel = g_slice_alloc0(pdi->channel_count
+                                        * pdi->channel_size);
+    
+    if (!pdi->update) {
+        g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                     "Update function for minimum/maximum was not found."
+                     "May pixel type is not supported yet." );
+        czi_free_pixel_dynamic_info( pdi );
+        return NULL;
+    }
+    
+    return pdi;
+}
+
+struct _czi_accumulator * czi_new_accumulator(
+                        enum _czi_accumulator_t accumulator_type,
+                        enum _czi_data_t        data_type,
+                        uint64_t                data_count,
+                        GError **               err){
+    struct _czi_accumulator * ca = (struct _czi_accumulator *) 
+                                   g_slice_alloc0( 
+                                       sizeof(struct _czi_accumulator)
+                                   );
+    const struct _czi_accumulator_func * caf = czi_get_accumulator_func(
+                                                  accumulator_type,
+                                                  data_type
+                                               );
+    if (caf) {
+        // Point to the accumulate method of the static accumulator function
+        // found
+        ca->accumulate = caf->accumulate;
+        ca->data_type = data_type;
+        ca->data_type_size = czi_data_type_size(data_type);
+        ca->data_count = data_count;
+        
+        ca->data = (uint8_t*)g_slice_alloc0(ca->data_type_size * data_count);
+    }
+    else {
+        g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                     "Unable to find accumulator function." );
+        czi_free_accumulator(ca);
+        return NULL;
+    }
+    
+    return ca;
+}
+
+struct _czi_rescale_info * czi_new_rescale_info(
+                        GError ** err                            G_GNUC_UNUSED){
+    struct _czi_rescale_info * cri = (struct _czi_rescale_info *) 
+                                     g_slice_alloc0( 
+                                         sizeof(struct _czi_rescale_info)
+                                     );
+    cri->shift = 0;
+    cri->slope = 1;
+    
+    return cri;
 }
 
 //============================================================================
@@ -1680,6 +2280,56 @@ void czi_free_dimension( struct _czi_dimension * ptr )
   if( ptr ) g_slice_free( struct _czi_dimension, ptr );
 }
 
+void czi_free_tile_descriptor( struct _openslide_czi_tile_descriptor * ptr )
+{
+  // g_debug( "czi_free_tile_descriptor" );
+  if( ptr ) g_slice_free( struct _openslide_czi_tile_descriptor, ptr );
+}
+
+void czi_free_pixel_dynamic_info( struct _czi_pixel_dynamic_info * ptr )
+{
+  // g_debug( "czi_free_pixel_dynamic_info" );
+  if( ptr ) {
+      if(ptr->min_per_channel)
+        g_slice_free1(ptr->channel_count
+                    * ptr->channel_size,
+                        ptr->min_per_channel);
+      
+      if(ptr->max_per_channel)
+        g_slice_free1(ptr->channel_count
+                    * ptr->channel_size,
+                        ptr->max_per_channel);
+      
+      g_slice_free(struct _czi_pixel_dynamic_info, ptr);
+  }
+}
+
+void czi_free_accumulator( struct _czi_accumulator * ptr )
+{
+  // g_debug( "czi_free_accumulator" );
+  if( ptr ) {
+      if (ptr->data)
+          g_slice_free1(ptr->data_type_size * ptr->data_count,
+                        ptr->data);
+
+      g_slice_free(struct _czi_accumulator, ptr);
+  }
+}
+
+void czi_free_rescale_info( struct _czi_rescale_info * ptr )
+{
+  // g_debug( "czi_free_rescale_info" );
+  if( ptr ) {
+      g_slice_free(struct _czi_rescale_info, ptr);
+  }
+}
+
+void czi_free_S16( int16_t * ptr )
+{
+  // g_debug( "czi_free_S16" );
+  if( ptr ) g_slice_free( int16_t, ptr );
+}
+
 void czi_free_S32( int32_t * ptr )
 {
   // g_debug( "czi_free_S32" );
@@ -1690,12 +2340,6 @@ void czi_free_S64( int64_t * ptr )
 {
   // g_debug( "czi_free_S64" );
   if( ptr ) g_slice_free( int64_t, ptr );
-}
-
-void czi_free_tile_descriptor( struct _openslide_czi_tile_descriptor * ptr )
-{
-  // g_debug( "czi_free_tile_descriptor" );
-  if( ptr ) g_slice_free( struct _openslide_czi_tile_descriptor, ptr );
 }
 
 //============================================================================
@@ -2446,6 +3090,1362 @@ const char * czi_boolean_t_string( bool b ) {
 //
 //============================================================================
 
+
+//============================================================================
+//   PRIVATE STRUCTURE DEFINITIONS
+//============================================================================
+//--- accumulator functions ----------------------------------------------------
+//--- minimum ------------------------------------------------------------------
+const struct _czi_accumulator_func _czi_accumulator_min_U8 = {
+  .accumulate = czi_accumulator_min_accumulate_U8,
+};
+
+const struct _czi_accumulator_func _czi_accumulator_min_U16 = {
+  .accumulate = czi_accumulator_min_accumulate_U16,
+};
+
+const struct _czi_accumulator_func _czi_accumulator_min_U32 = {
+  .accumulate = czi_accumulator_min_accumulate_U32,
+};
+
+const struct _czi_accumulator_func _czi_accumulator_min_U64 = {
+  .accumulate = czi_accumulator_min_accumulate_U64,
+};
+
+const struct _czi_accumulator_func _czi_accumulator_min_FLOAT = {
+  .accumulate = czi_accumulator_min_accumulate_FLOAT,
+};
+
+const struct _czi_accumulator_func _czi_accumulator_min_CFLOAT = {
+  .accumulate = czi_accumulator_min_accumulate_CFLOAT,
+};
+
+//--- maximum ------------------------------------------------------------------
+const struct _czi_accumulator_func _czi_accumulator_max_U8 = {
+  .accumulate = czi_accumulator_max_accumulate_U8,
+};
+
+const struct _czi_accumulator_func _czi_accumulator_max_U16 = {
+  .accumulate = czi_accumulator_max_accumulate_U16,
+};
+
+const struct _czi_accumulator_func _czi_accumulator_max_U32 = {
+  .accumulate = czi_accumulator_max_accumulate_U32,
+};
+
+const struct _czi_accumulator_func _czi_accumulator_max_U64 = {
+  .accumulate = czi_accumulator_max_accumulate_U64,
+};
+
+const struct _czi_accumulator_func _czi_accumulator_max_FLOAT = {
+  .accumulate = czi_accumulator_max_accumulate_FLOAT,
+};
+
+const struct _czi_accumulator_func _czi_accumulator_max_CFLOAT = {
+  .accumulate = czi_accumulator_max_accumulate_CFLOAT,
+};
+
+//--- rescale info -------------------------------------------------------------
+const struct _czi_rescale_info_func _czi_rescale_info_U16_to_U8 = {
+  .rescale_info = czi_rescale_info_U16_to_U8,
+};
+
+const struct _czi_rescale_info_func _czi_rescale_info_FLOAT_to_U8 = {
+  .rescale_info = czi_rescale_info_FLOAT_to_U8,
+};
+
+//--- channel converter --------------------------------------------------------
+const struct _czi_channel_converter _czi_channel_converter_U8_to_U8 = {
+  .convert = czi_channel_convert_U8_to_U8,
+  .src_channel_type = U8_TYPE,
+  .dest_channel_type = U8_TYPE,
+};
+
+const struct _czi_channel_converter _czi_channel_converter_U16_to_U8 = {
+  .convert = czi_channel_convert_U16_to_U8,
+  .src_channel_type = U16_TYPE,
+  .dest_channel_type = U8_TYPE,
+};
+
+const struct _czi_channel_converter _czi_channel_converter_U32_to_U8 = {
+  .convert = czi_channel_convert_U32_to_U8,
+  .src_channel_type = U32_TYPE,
+  .dest_channel_type = U8_TYPE,
+};
+
+const struct _czi_channel_converter _czi_channel_converter_U64_to_U8 = {
+  .convert = czi_channel_convert_U64_to_U8,
+  .src_channel_type = U64_TYPE,
+  .dest_channel_type = U8_TYPE,
+};
+
+const struct _czi_channel_converter _czi_channel_converter_FLOAT_to_U8 = {
+  .convert = czi_channel_convert_FLOAT_to_U8,
+  .src_channel_type = FLOAT_TYPE,
+  .dest_channel_type = U8_TYPE,
+};
+
+const struct _czi_channel_converter _czi_channel_converter_CFLOAT_to_U8 = {
+  .convert = czi_channel_convert_CFLOAT_to_U8,
+  .src_channel_type = CFLOAT_TYPE,
+  .dest_channel_type = U8_TYPE,
+};
+
+//--- pixel converter ----------------------------------------------------------
+const struct _czi_pixel_converter _czi_pixel_converter_BGR_24_to_BGRA_32 = {
+  .convert = czi_pixel_convert_BGR_24_to_BGRA_32,
+  .src_pixel_type = BGR_24,
+  .dest_pixel_type = BGRA_32,
+};
+
+const struct _czi_pixel_converter _czi_pixel_converter_BGRA_32_to_BGRA_32 = {
+  .convert = czi_pixel_convert_BGRA_32_to_BGRA_32,
+  .src_pixel_type = BGRA_32,
+  .dest_pixel_type = BGRA_32,
+};
+
+const struct _czi_pixel_converter _czi_pixel_converter_BGR_48_to_BGRA_32 = {
+  .convert = czi_pixel_convert_BGR_48_to_BGRA_32,
+  .src_pixel_type = BGR_48,
+  .dest_pixel_type = BGRA_32,
+};
+
+const struct _czi_pixel_converter _czi_pixel_converter_BGR_96_FLOAT_to_BGRA_32 = {
+  .convert = czi_pixel_convert_BGR_96_FLOAT_to_BGRA_32,
+  .src_pixel_type = BGR_96_FLOAT,
+  .dest_pixel_type = BGRA_32,
+};
+
+const struct _czi_pixel_converter _czi_pixel_converter_BGR_192_COMPLEX_FLOAT_to_BGRA_32 = {
+  .convert = czi_pixel_convert_BGR_192_COMPLEX_FLOAT_to_BGRA_32,
+  .src_pixel_type = BGR_192_COMPLEX_FLOAT,
+  .dest_pixel_type = BGRA_32,
+};
+
+//==============================================================================
+//   PRIVATE METHODS DEFINITIONS
+//==============================================================================
+//--- converters ---------------------------------------------------------------
+int32_t czi_uid_S32(uint8_t                b0,
+                    uint8_t                b1,
+                    uint8_t                b2,
+                    uint8_t                b3) {
+   int32_t  uid;
+   ((uint8_t*)&uid)[0] = b0;
+   ((uint8_t*)&uid)[1] = b1;
+   ((uint8_t*)&uid)[2] = b2;
+   ((uint8_t*)&uid)[3] = b3;
+   
+   return uid;
+}
+
+//--- buffer convert -----------------------------------------------------------
+void czi_buffer_convert_U8_to_U8(
+                         uint8_t                              * src_buffer,
+                         uint8_t                              * dest_buffer,
+                         double                                 shift,
+                         double                                 scale
+) {
+    (*dest_buffer) = (uint8_t)((*((uint8_t*)src_buffer) + shift) * scale);
+}
+
+void czi_buffer_convert_U16_to_U8(
+                         uint8_t                              * src_buffer,
+                         uint8_t                              * dest_buffer,
+                         double                                 shift,
+                         double                                 scale
+) {
+    /*
+    g_debug("value:%d, scaled value: %d",
+        *((uint16_t*)src_buffer),
+        (uint8_t)((*((uint16_t*)src_buffer) + shift) * scale)
+    );*/
+    (*dest_buffer) = (uint8_t)((*((uint16_t*)src_buffer) + shift) * scale);
+}
+
+void czi_buffer_convert_U32_to_U8(
+                         uint8_t                              * src_buffer,
+                         uint8_t                              * dest_buffer,
+                         double                                 shift,
+                         double                                 scale
+) {
+    (*dest_buffer) = (uint8_t)((*((uint32_t*)src_buffer) + shift) * scale);
+}
+
+void czi_buffer_convert_U64_to_U8(
+                         uint8_t                              * src_buffer,
+                         uint8_t                              * dest_buffer,
+                         double                                 shift,
+                         double                                 scale
+) {
+    (*dest_buffer) = (uint8_t)((*((uint64_t*)src_buffer) + shift) * scale);
+}
+
+void czi_buffer_convert_FLOAT_to_U8(
+                         uint8_t                              * src_buffer,
+                         uint8_t                              * dest_buffer,
+                         double                                 shift,
+                         double                                 scale
+) {
+    (*dest_buffer) = (uint8_t)((*((float*)src_buffer) + shift) * scale);
+}
+
+void czi_buffer_convert_CFLOAT_to_U8(
+                         uint8_t                              * src_buffer,
+                         uint8_t                              * dest_buffer,
+                         double                                 shift,
+                         double                                 scale
+) {
+    (*dest_buffer) = (uint8_t)((cabsf(*((float complex *)src_buffer)) + shift) * scale);
+}
+
+//--- typed convert ------------------------------------------------------------
+uint8_t czi_convert_U8_to_U8(
+                         uint8_t                                value,
+                         double                                 shift,
+                         double                                 scale
+) {
+    uint8_t result;
+    czi_buffer_convert_U8_to_U8(&value,
+                                &result,
+                                shift,
+                                scale);
+    return result;
+}
+
+uint8_t czi_convert_U16_to_U8(
+                         uint16_t                               value,
+                         double                                 shift,
+                         double                                 scale
+) {
+    uint8_t result;
+    czi_buffer_convert_U16_to_U8((uint8_t*)&value,
+                                 &result,
+                                 shift,
+                                 scale);
+    return result;
+}
+
+uint8_t czi_convert_U32_to_U8(
+                         uint32_t                               value,
+                         double                                 shift,
+                         double                                 scale
+) {
+    uint8_t result;
+    czi_buffer_convert_U32_to_U8((uint8_t*)&value,
+                                 &result,
+                                 shift,
+                                 scale);
+    return result;
+}
+
+uint8_t czi_convert_U64_to_U8(
+                         uint64_t                               value,
+                         double                                 shift,
+                         double                                 scale
+) {
+    uint8_t result;
+    czi_buffer_convert_U64_to_U8((uint8_t*)&value,
+                                 &result,
+                                 shift,
+                                 scale);
+    return result;
+}
+
+uint8_t czi_convert_FLOAT_to_U8(
+                         float                                  value,
+                         double                                 shift,
+                         double                                 scale
+) {
+    uint8_t result;
+    czi_buffer_convert_U64_to_U8((uint8_t*)&value,
+                                 &result,
+                                 shift,
+                                 scale);
+    return result;
+}
+
+uint8_t czi_convert_CFLOAT_to_U8(
+                         complex float                          value,
+                         double                                 shift,
+                         double                                 scale
+) {
+    uint8_t result;
+    czi_buffer_convert_U64_to_U8((uint8_t*)&value,
+                                 &result,
+                                 shift,
+                                 scale);
+    return result;
+}
+
+//--- data type ----------------------------------------------------------------
+uint8_t czi_data_type_size( enum _czi_data_t type ) {
+    switch(type) {
+        default:
+        case DATA_TYPE_UNKNOWN:
+            return 0;
+            
+        case U8_TYPE:
+            return 1;
+            
+        case U16_TYPE:
+            return 2;
+            
+        case U32_TYPE:
+        case FLOAT_TYPE:
+            return 4;
+            
+        case U64_TYPE:
+        case CFLOAT_TYPE:
+            return 8;
+    }
+}
+
+enum _czi_data_t czi_data_type( enum czi_pixel_t type ) {
+
+    switch(type) {
+        default:
+        case PXL_UNKNOWN:
+            return DATA_TYPE_UNKNOWN;
+            
+        case GRAY_8:
+        case BGR_24:
+        case BGRA_32:
+            return U8_TYPE;
+
+        case GRAY_16:
+        case BGR_48:
+            return U16_TYPE;
+
+        case GRAY_32_FLOAT:
+        case BGR_96_FLOAT:
+            return FLOAT_TYPE;
+
+        case GRAY_64_COMPLEX_FLOAT:
+        case BGR_192_COMPLEX_FLOAT:
+            return CFLOAT_TYPE;
+
+        case GRAY_32:
+            return U32_TYPE;
+
+        case GRAY_64:
+            return U64_TYPE;
+    }
+}
+
+//--- accumulator functions ----------------------------------------------------
+G_LOCK_DEFINE(_czi_accumulator_func_hash_table);
+GHashTable * _czi_accumulator_func_hash_table = NULL;
+
+int32_t czi_accumulator_func_uid(
+                        enum _czi_accumulator_t                type,
+                        enum _czi_data_t                       data_type) { 
+   return czi_uid_S32((uint8_t)type, 0, (uint8_t)data_type, 0);
+}
+
+GHashTable * czi_accumulator_func_hash_table(
+                        GError                              ** err) {
+    if (!_czi_accumulator_func_hash_table) {
+        G_LOCK(_czi_accumulator_func_hash_table);
+        // g_debug("czi_accumulator_func_hash_table");
+        _czi_accumulator_func_hash_table = g_hash_table_new_full(
+                    &g_int_hash,
+                    &g_int_equal,
+                    (void(*)(gpointer)) &czi_free_S32, 
+                    (void(*)(gpointer)) NULL // No need to free accumulator 
+                                             // functions as they are allocated
+                                             // statically
+        );
+        
+        // Insert each accumulator function into _czi_accumulator_func_hash_table
+        //--- minimum functions ------------------------------------------------
+        g_hash_table_insert(
+            _czi_accumulator_func_hash_table,
+            czi_new_S32(
+                czi_accumulator_func_uid(MIN_ACCUMULATOR, U8_TYPE),
+                err),
+            (gpointer)&_czi_accumulator_min_U8);
+        
+        g_hash_table_insert(
+            _czi_accumulator_func_hash_table,
+            czi_new_S32(
+                czi_accumulator_func_uid(MIN_ACCUMULATOR, U16_TYPE),
+                err),
+            (gpointer)&_czi_accumulator_min_U16);
+        
+        g_hash_table_insert(
+            _czi_accumulator_func_hash_table,
+            czi_new_S32(
+                czi_accumulator_func_uid(MIN_ACCUMULATOR, U32_TYPE),
+                err),
+            (gpointer)&_czi_accumulator_min_U32);
+        
+        g_hash_table_insert(
+            _czi_accumulator_func_hash_table,
+            czi_new_S32(
+                czi_accumulator_func_uid(MIN_ACCUMULATOR, U64_TYPE),
+                err),
+            (gpointer)&_czi_accumulator_min_U64);
+        
+        g_hash_table_insert(
+            _czi_accumulator_func_hash_table,
+            czi_new_S32(
+                czi_accumulator_func_uid(MIN_ACCUMULATOR, FLOAT_TYPE),
+                err),
+            (gpointer)&_czi_accumulator_min_FLOAT);
+        
+        g_hash_table_insert(
+            _czi_accumulator_func_hash_table,
+            czi_new_S32(
+                czi_accumulator_func_uid(MIN_ACCUMULATOR, CFLOAT_TYPE),
+                err),
+            (gpointer)&_czi_accumulator_min_CFLOAT);      
+        
+        //--- maximum functions ------------------------------------------------
+        g_hash_table_insert(
+            _czi_accumulator_func_hash_table,
+            czi_new_S32(
+                czi_accumulator_func_uid(MAX_ACCUMULATOR, U8_TYPE),
+                err),
+            (gpointer)&_czi_accumulator_max_U8);
+        
+        g_hash_table_insert(
+            _czi_accumulator_func_hash_table,
+            czi_new_S32(
+                czi_accumulator_func_uid(MAX_ACCUMULATOR, U16_TYPE),
+                err),
+            (gpointer)&_czi_accumulator_max_U16);
+        
+        g_hash_table_insert(
+            _czi_accumulator_func_hash_table,
+            czi_new_S32(
+                czi_accumulator_func_uid(MAX_ACCUMULATOR, U32_TYPE),
+                err),
+            (gpointer)&_czi_accumulator_max_U32);
+        
+        g_hash_table_insert(
+            _czi_accumulator_func_hash_table,
+            czi_new_S32(
+                czi_accumulator_func_uid(MAX_ACCUMULATOR, U64_TYPE),
+                err),
+            (gpointer)&_czi_accumulator_max_U64);
+        
+        g_hash_table_insert(
+            _czi_accumulator_func_hash_table,
+            czi_new_S32(
+                czi_accumulator_func_uid(MAX_ACCUMULATOR, FLOAT_TYPE),
+                err),
+            (gpointer)&_czi_accumulator_max_FLOAT);
+        
+        g_hash_table_insert(
+            _czi_accumulator_func_hash_table,
+            czi_new_S32(
+                czi_accumulator_func_uid(MAX_ACCUMULATOR, CFLOAT_TYPE),
+                err),
+            (gpointer)&_czi_accumulator_max_CFLOAT);
+        
+        G_UNLOCK(_czi_accumulator_func_hash_table);
+    }
+    return _czi_accumulator_func_hash_table;
+}
+
+const struct _czi_accumulator_func * czi_get_accumulator_func( 
+                                  enum _czi_accumulator_t      type,
+                                  enum _czi_data_t             data_type
+) {
+     GHashTable * accumulator_func = czi_accumulator_func_hash_table(0);
+     
+     return (const struct _czi_accumulator_func *)
+            g_hash_table_lookup(
+                accumulator_func,
+                czi_new_S32(
+                    czi_accumulator_func_uid(type,
+                                             data_type),
+                    0
+                )
+            );
+}
+
+//--- accumulator --------------------------------------------------------------
+void czi_buffer_accumulate(
+                            enum _czi_accumulator_t   accumulator_type,
+                            uint8_t                 * buffer,
+                            uint8_t                 * result,
+                            enum _czi_data_t          data_type,
+                            uint64_t                  data_count,
+                            GError                 ** err){   
+    if (data_count > 0) {
+        uint8_t data_type_size = czi_data_type_size(data_type);
+        
+        struct _czi_accumulator * accumulator = czi_new_accumulator(
+                                                    accumulator_type,
+                                                    data_type,
+                                                    1,
+                                                    err
+                                                );
+        
+        // Initializes accumulator
+        if (accumulator) {
+            memcpy(accumulator->data, 
+                   buffer,
+                   data_type_size);
+        }
+        else {
+            g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                        "Unable to allocate accumulator." );
+            return;
+        }
+        
+        // Go through values in the buffer and accumulate data
+        uint8_t * p = buffer + data_type_size;
+        for (uint64_t i = 1; (i < data_count); ++i) {
+            accumulator->accumulate(accumulator, 0, p);
+            p += data_type_size;
+        }
+        
+        // Copy result
+        memcpy(result, 
+               accumulator->data,
+               data_type_size);    
+        
+        czi_free_accumulator(accumulator);
+    }
+    /*
+    else {
+        g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                    "Unable to initialize accumulator because buffer does not "
+                    "contain data.");
+    }
+    */
+}
+
+
+//--- channel converters -------------------------------------------------------
+// Hash table of channel converters
+G_LOCK_DEFINE(_czi_channel_converter_hash_table);
+GHashTable * _czi_channel_converter_hash_table = NULL;
+
+int32_t czi_channel_converter_uid(
+                                  enum _czi_data_t               src_type,
+                                  enum _czi_data_t               dest_type) {
+   
+   return czi_uid_S32(0, (uint8_t)dest_type, 0, (uint8_t)src_type);
+}
+
+GHashTable * czi_channel_converter_hash_table(GError         ** err) {
+    
+    if (!_czi_channel_converter_hash_table){
+        g_debug("czi_channel_converter_hash_table::initialize channel converter hash table");
+        G_LOCK(_czi_channel_converter_hash_table);
+        _czi_channel_converter_hash_table = g_hash_table_new_full(
+                    &g_int_hash,
+                    &g_int_equal,
+                    (void(*)(gpointer)) &czi_free_S32, 
+                    (void(*)(gpointer)) NULL // No need to free converters as they
+                                            // are allocated statically
+        );
+        
+        // Insert each convert into converters g_hash_table
+        g_hash_table_insert(
+            _czi_channel_converter_hash_table,
+            czi_new_S32(
+                czi_channel_converter_uid(U8_TYPE,
+                                          U8_TYPE),
+                err
+            ),
+            (gpointer)&_czi_channel_converter_U8_to_U8
+        );
+
+        g_hash_table_insert(
+            _czi_channel_converter_hash_table,
+            czi_new_S32(
+                czi_channel_converter_uid(U16_TYPE,
+                                          U8_TYPE),
+                err
+            ),
+            (gpointer)&_czi_channel_converter_U16_to_U8
+        );
+        
+        g_hash_table_insert(
+            _czi_channel_converter_hash_table,
+            czi_new_S32(
+                czi_channel_converter_uid(U32_TYPE,
+                                          U8_TYPE),
+                err
+            ),
+            (gpointer)&_czi_channel_converter_U32_to_U8
+        );
+        
+        g_hash_table_insert(
+            _czi_channel_converter_hash_table,
+            czi_new_S32(
+                czi_channel_converter_uid(U64_TYPE,
+                                          U8_TYPE),
+                err
+            ),
+            (gpointer)&_czi_channel_converter_U64_to_U8
+        );
+        
+        g_hash_table_insert(
+            _czi_channel_converter_hash_table,
+            czi_new_S32(
+                czi_channel_converter_uid(FLOAT_TYPE,
+                                          U8_TYPE),
+                err
+            ),
+            (gpointer)&_czi_channel_converter_FLOAT_to_U8
+        );
+        
+        g_hash_table_insert(
+            _czi_channel_converter_hash_table,
+            czi_new_S32(
+                czi_channel_converter_uid(CFLOAT_TYPE,
+                                          U8_TYPE),
+                err
+            ),
+            (gpointer)&_czi_channel_converter_CFLOAT_to_U8
+        );
+        
+        G_UNLOCK(_czi_channel_converter_hash_table);
+    }
+    return _czi_channel_converter_hash_table;
+}
+
+const struct _czi_channel_converter * czi_get_channel_converter( 
+    enum _czi_data_t src_channel_type,
+    enum _czi_data_t dest_channel_type
+) {
+     GHashTable * converters = czi_channel_converter_hash_table(0);
+     
+     return (const struct _czi_channel_converter *)
+            g_hash_table_lookup(
+                converters,
+                czi_new_S32(
+                    czi_channel_converter_uid(src_channel_type,
+                                              dest_channel_type),
+                    0
+                )
+            );
+}
+
+void czi_channel_convert_U8_to_U8(
+                        const struct _czi_channel_converter  * cpc           G_GNUC_UNUSED,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err           G_GNUC_UNUSED
+) {
+    czi_buffer_convert_U8_to_U8(src_buffer, 
+                                dest_buffer, 
+                                (cri ? cri->shift : 0),
+                                (cri ? cri->slope : 1));
+}
+
+void czi_channel_convert_U16_to_U8(
+                        const struct _czi_channel_converter  * cpc           G_GNUC_UNUSED,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err           G_GNUC_UNUSED
+) {
+    //g_debug("czi_channel_convert_U16_to_U8");
+    czi_buffer_convert_U16_to_U8(src_buffer, 
+                                 dest_buffer, 
+                                 (cri ? cri->shift : 0),
+                                 (cri ? cri->slope : 1));
+}
+
+void czi_channel_convert_U32_to_U8(
+                        const struct _czi_channel_converter  * cpc           G_GNUC_UNUSED,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err           G_GNUC_UNUSED
+) {
+    czi_buffer_convert_U32_to_U8(src_buffer, 
+                                 dest_buffer, 
+                                 (cri ? cri->shift : 0),
+                                 (cri ? cri->slope : 1));
+}
+
+void czi_channel_convert_U64_to_U8(
+                        const struct _czi_channel_converter  * cpc           G_GNUC_UNUSED,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err           G_GNUC_UNUSED
+) {
+    czi_buffer_convert_U64_to_U8(src_buffer, 
+                                 dest_buffer, 
+                                 (cri ? cri->shift : 0),
+                                 (cri ? cri->slope : 1));
+}
+
+void czi_channel_convert_FLOAT_to_U8(
+                        const struct _czi_channel_converter  * cpc           G_GNUC_UNUSED,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err           G_GNUC_UNUSED
+) {
+    czi_buffer_convert_FLOAT_to_U8(src_buffer, 
+                                   dest_buffer, 
+                                   (cri ? cri->shift : 0),
+                                   (cri ? cri->slope : 1));
+}
+
+void czi_channel_convert_CFLOAT_to_U8(
+                        const struct _czi_channel_converter  * cpc           G_GNUC_UNUSED,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err           G_GNUC_UNUSED
+) {
+    czi_buffer_convert_CFLOAT_to_U8(src_buffer, 
+                                    dest_buffer, 
+                                    (cri ? cri->shift : 0),
+                                    (cri ? cri->slope : 1));
+}
+
+//--- pixel dynamic info -------------------------------------------------------
+
+void czi_pixel_dynamic_info_update(
+                        struct _czi_pixel_dynamic_info * pdi,
+                        uint8_t                        * buffer,
+                        uint64_t                         buffer_size,
+                        GError                        ** err ){
+    
+    struct _czi_accumulator * min_accumulator = czi_new_accumulator(
+                                            MIN_ACCUMULATOR,
+                                            pdi->type,
+                                            (uint64_t)pdi->channel_count,
+                                            err
+                                        );
+    struct _czi_accumulator * max_accumulator = czi_new_accumulator(
+                                            MAX_ACCUMULATOR,
+                                            pdi->type,
+                                            (uint64_t)pdi->channel_count,
+                                            err
+                                        );
+    // Initializes accumulators
+    if (min_accumulator) {
+        memcpy(min_accumulator->data, 
+               buffer,
+               pdi->channel_count * pdi->channel_size);
+    }
+    else {
+        g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                    "Unable to allocate min accumulator." );
+        return;
+    }
+    
+    if (max_accumulator) {    
+        memcpy(max_accumulator->data, 
+               buffer,
+               pdi->channel_count * pdi->channel_size);
+    }
+    else {
+        g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                    "Unable to allocate max accumulator." );
+        return;
+    }
+    
+    // Go through data and update min/max information for each pixel
+    uint64_t p = pdi->channel_count * pdi->channel_size;
+    while (p < buffer_size) {
+        for (uint8_t c = 0; (c < pdi->channel_count); ++c) {
+            min_accumulator->accumulate(min_accumulator, c, buffer + p);
+            max_accumulator->accumulate(max_accumulator, c, buffer + p);
+            p += pdi->channel_size;
+        }
+    }
+    
+    //g_debug("Copy min/max accumulator data to pdi");
+    memcpy(pdi->min_per_channel, 
+           min_accumulator->data,
+           pdi->channel_count * pdi->channel_size);
+    
+    memcpy(pdi->max_per_channel,
+           max_accumulator->data,
+           pdi->channel_count * pdi->channel_size);
+
+    czi_free_accumulator(min_accumulator);
+    czi_free_accumulator(max_accumulator);
+}
+
+/*
+void czi_pixel_dynamic_info_update_min_max_multichannel(
+                        struct _czi_pixel_dynamic_info * pdi,
+                        uint8_t                        * buffer){
+    if (pdi->min_accumulator && pdi->max_accumulator) {
+        for (uint8_t c = 0; (c < pdi->channel_count); ++c) {
+            pdi->min_accumulator->accumulate(pdi->min_accumulator, c, buffer);
+            pdi->max_accumulator->accumulate(pdi->max_accumulator, c, buffer);
+            buffer += pdi->channel_size;
+        }
+    }
+    else{
+        g_debug("Unable to update pixel dynamic information because"
+                "either min_accumulator is NULL or max_accumulator is NULL."
+        );
+    }
+}
+*/
+//---minimum accumulators-------------------------------------------------------
+void czi_accumulator_min_accumulate_U8(
+                        struct _czi_accumulator        * ac,
+                        uint64_t                         pos,
+                        uint8_t                        * buffer
+) {
+    // Update minimum
+    if (*(((uint8_t *)ac->data) + pos) > *((uint8_t *)buffer))
+        *(((uint8_t *)ac->data) + pos) = *((uint8_t *)buffer);
+}
+
+void czi_accumulator_min_accumulate_U16(
+                        struct _czi_accumulator        * ac,
+                        uint64_t                         pos,
+                        uint8_t                        * buffer
+) {
+    // Update minimum
+    if (*(((uint16_t *)ac->data) + pos) > *((uint16_t *)buffer))
+        *(((uint16_t *)ac->data) + pos) = *((uint16_t *)buffer);
+}
+
+void czi_accumulator_min_accumulate_U32(
+                        struct _czi_accumulator        * ac,
+                        uint64_t                         pos,
+                        uint8_t                        * buffer
+) {
+    // Update minimum
+    if (*(((uint32_t *)ac->data) + pos) > *((uint32_t *)buffer))
+        *(((uint32_t *)ac->data) + pos) = *((uint32_t *)buffer);
+}
+
+void czi_accumulator_min_accumulate_U64(
+                        struct _czi_accumulator        * ac,
+                        uint64_t                         pos,
+                        uint8_t                        * buffer
+) {
+    // Update minimum
+    if (*(((uint64_t *)ac->data) + pos) > *((uint64_t *)buffer))
+        *(((uint64_t *)ac->data) + pos) = *((uint64_t *)buffer);
+}
+
+void czi_accumulator_min_accumulate_FLOAT(
+                        struct _czi_accumulator        * ac,
+                        uint64_t                         pos,
+                        uint8_t                        * buffer
+) {
+    // Update minimum
+    if (*(((float *)ac->data) + pos) > *((float *)buffer))
+        *(((float *)ac->data) + pos) = *((float *)buffer);
+}
+
+void czi_accumulator_min_accumulate_CFLOAT(
+                        struct _czi_accumulator        * ac,
+                        uint64_t                         pos,
+                        uint8_t                        * buffer
+) {
+    // Update minimum
+    if (cabsf(*(((complex float *)ac->data) + pos)) > cabsf(*((complex float *)buffer)))
+        *(((complex float *)ac->data) + pos) = *((complex float *)buffer);
+}
+
+//---maximum accumulators-------------------------------------------------------
+void czi_accumulator_max_accumulate_U8(
+                        struct _czi_accumulator        * ac,
+                        uint64_t                         pos,
+                        uint8_t                        * buffer
+) {
+    // Update maximum
+    if (*(((uint8_t *)ac->data) + pos) < *((uint8_t *)buffer))
+        *(((uint8_t *)ac->data) + pos) = *((uint8_t *)buffer);
+}
+
+void czi_accumulator_max_accumulate_U16(
+                        struct _czi_accumulator        * ac,
+                        uint64_t                         pos,
+                        uint8_t                        * buffer
+) {
+    // Update maximum
+    if (*(((uint16_t *)ac->data) + pos) < *((uint16_t *)buffer))
+        *(((uint16_t *)ac->data) + pos) = *((uint16_t *)buffer);
+}
+
+void czi_accumulator_max_accumulate_U32(
+                        struct _czi_accumulator        * ac,
+                        uint64_t                         pos,
+                        uint8_t                        * buffer
+) {
+    // Update maximum
+    if (*(((uint32_t *)ac->data) + pos) < *((uint32_t *)buffer))
+        *(((uint32_t *)ac->data) + pos) = *((uint32_t *)buffer);
+}
+
+void czi_accumulator_max_accumulate_U64(
+                        struct _czi_accumulator        * ac,
+                        uint64_t                         pos,
+                        uint8_t                        * buffer
+) {
+    // Update maximum
+    if (*(((uint64_t *)ac->data) + pos) < *((uint64_t *)buffer))
+        *(((uint64_t *)ac->data) + pos) = *((uint64_t *)buffer);
+}
+
+void czi_accumulator_max_accumulate_FLOAT(
+                        struct _czi_accumulator        * ac,
+                        uint64_t                         pos,
+                        uint8_t                        * buffer
+) {
+    // Update maximum
+    if (*(((float *)ac->data) + pos) < *((float *)buffer))
+        *(((float *)ac->data) + pos) = *((float *)buffer);
+}
+
+void czi_accumulator_max_accumulate_CFLOAT(
+                        struct _czi_accumulator        * ac,
+                        uint64_t                         pos,
+                        uint8_t                        * buffer
+) {
+    // Update maximum
+    if (cabsf(*(((complex float *)ac->data) + pos)) < cabsf(*((complex float *)buffer)))
+        *(((complex float *)ac->data) + pos) = *((complex float *)buffer);
+}
+
+//--- rescale info -------------------------------------------------------------
+G_LOCK_DEFINE(_czi_rescale_info_func_hash_table);
+GHashTable * _czi_rescale_info_func_hash_table = NULL;
+
+uint32_t czi_rescale_info_func_uid(
+                                    enum _czi_data_t                  src_type,
+                                    enum _czi_data_t                  dest_type) {
+   return czi_uid_S32(0, (uint8_t)dest_type, 0, (uint8_t)src_type);
+}
+
+GHashTable * czi_rescale_info_func_hash_table(GError           ** err) {
+    
+    if (!_czi_rescale_info_func_hash_table) {
+        // g_debug("czi_rescale_info_func_hash_table");
+        G_LOCK(_czi_rescale_info_func_hash_table);
+         _czi_rescale_info_func_hash_table = g_hash_table_new_full(
+                    &g_int_hash,
+                    &g_int_equal,
+                    (void(*)(gpointer)) &czi_free_S32, 
+                    (void(*)(gpointer)) NULL // No need to free converters as they
+                                            // are allocated statically
+        );
+
+        // Insert each rescale_info function into g_hash_table
+        g_hash_table_insert(
+            _czi_rescale_info_func_hash_table,
+            czi_new_S32(
+                czi_rescale_info_func_uid(U16_TYPE, U8_TYPE),
+                err),
+            (gpointer)&_czi_rescale_info_U16_to_U8
+        );
+        
+        g_hash_table_insert(
+            _czi_rescale_info_func_hash_table,
+            czi_new_S32(
+                czi_rescale_info_func_uid(FLOAT_TYPE, U8_TYPE),
+                err),
+            (gpointer)&_czi_rescale_info_FLOAT_to_U8
+        );
+        G_UNLOCK(_czi_rescale_info_func_hash_table);
+    }
+    return _czi_rescale_info_func_hash_table;
+}
+
+const struct _czi_rescale_info_func * czi_get_rescale_info_func( 
+                                    enum _czi_data_t                  src_type,
+                                    enum _czi_data_t                  dest_type) {
+     GHashTable * rescale_info_func_hash_table = czi_rescale_info_func_hash_table(0);
+     
+     return (const struct _czi_rescale_info_func *)g_hash_table_lookup(
+                                    rescale_info_func_hash_table,
+                                    czi_new_S32(
+                                        czi_rescale_info_func_uid(src_type,
+                                                                  dest_type),
+                                        0)
+                                  );
+}
+
+struct _czi_rescale_info * czi_rescale_info_U16_to_U8(
+                                    struct _czi_pixel_dynamic_info  * pdi,
+                                    GError                         ** err) {
+
+    struct _czi_rescale_info * cri = czi_new_rescale_info(0);
+                          
+    uint16_t min_value = USHRT_MAX, max_value = 0;
+        
+    // for (uint8_t c = 0; c < pdi->channel_count; ++c)
+    //     g_debug("czi_rescale_info_U16_to_U8:: min_per_channel[%d] %d, max_per_channel[%d] %d",
+    //             c, *(((uint16_t*)pdi->min_per_channel) + c),
+    //             c, *(((uint16_t*)pdi->max_per_channel) + c));
+                
+    czi_buffer_accumulate(MIN_ACCUMULATOR,
+                          pdi->min_per_channel,
+                          (uint8_t *)&min_value,
+                          U16_TYPE,
+                          pdi->channel_count,
+                          err);
+    czi_buffer_accumulate(MAX_ACCUMULATOR,
+                          pdi->max_per_channel,
+                          (uint8_t *)&max_value,
+                          U16_TYPE,
+                          pdi->channel_count,
+                          err);
+    //g_debug("czi_rescale_info_U16_to_U8, min_value: %d, max_value: %d",
+    //        min_value, max_value
+    //);
+    if ((max_value - min_value) >= UCHAR_MAX) {
+        //g_debug("czi_rescale_info_U16_to_U8, need to rescale dynamic");
+        // Need to rescale dynamic
+        if (min_value > 0) {
+            // If the dynamic minimum value is not 0 it may be important
+            // to keep the particular significance of the 0 value. So we 
+            // calculate slope using 255 values and the output dynamic is 
+            // processed to start at value 1.
+            cri->slope = UCHAR_MAX / ((double)(max_value - min_value + 1));
+            cri->shift = (1 / cri->slope) - min_value;
+        }
+        else {
+            cri->slope = (UCHAR_MAX + 1) / ((double)(max_value + 1));
+            cri->shift = (-(double)min_value);            
+        }
+    }
+    else if (max_value > UCHAR_MAX) {
+        //g_debug("czi_rescale_info_U16_to_U8, need to shift dynamic");
+        // Shift the dynamic to keep data in the destination range
+        cri->shift = UCHAR_MAX - (double)max_value;
+        cri->slope = 1;
+    }
+    else {
+        //g_debug("czi_rescale_info_U16_to_U8, keep default");
+        // Default is to keep dynamic shift and to have a slope of 1
+        cri->shift = 0;
+        cri->slope = 1;
+    }
+        
+    return cri;
+}
+
+struct _czi_rescale_info * czi_rescale_info_FLOAT_to_U8(
+                                    struct _czi_pixel_dynamic_info  * pdi,
+                                    GError                         ** err) {
+
+    struct _czi_rescale_info * cri = czi_new_rescale_info(0);
+                          
+    float min_value = FLT_MAX, max_value = 0;
+        
+    // for (uint8_t c = 0; c < pdi->channel_count; ++c)
+    //     g_debug("czi_rescale_info_U16_to_U8:: min_per_channel[%d] %d, max_per_channel[%d] %d",
+    //             c, *(((uint16_t*)pdi->min_per_channel) + c),
+    //             c, *(((uint16_t*)pdi->max_per_channel) + c));
+                
+    czi_buffer_accumulate(MIN_ACCUMULATOR,
+                          pdi->min_per_channel,
+                          (uint8_t *)&min_value,
+                          FLOAT_TYPE,
+                          pdi->channel_count,
+                          err);
+    czi_buffer_accumulate(MAX_ACCUMULATOR,
+                          pdi->max_per_channel,
+                          (uint8_t *)&max_value,
+                          FLOAT_TYPE,
+                          pdi->channel_count,
+                          err);
+    //g_debug("czi_rescale_info_U16_to_U8, min_value: %d, max_value: %d",
+    //        min_value, max_value
+    //);
+    if ((max_value - min_value) >= UCHAR_MAX) {
+        //g_debug("czi_rescale_info_U16_to_U8, need to rescale dynamic");
+        // Need to rescale dynamic
+        if (min_value > 0) {
+            // If the dynamic minimum value is not 0 it may be important
+            // to keep the particular significance of the 0 value. So we 
+            // calculate slope using 255 values and the output dynamic is 
+            // processed to start at value 1.
+            cri->slope = UCHAR_MAX / ((double)(max_value - min_value + 1));
+            cri->shift = (1 / cri->slope) - min_value;
+        }
+        else {
+            cri->slope = (UCHAR_MAX + 1) / ((double)(max_value + 1));
+            cri->shift = (-(double)min_value);            
+        }
+    }
+    else if (max_value > UCHAR_MAX) {
+        //g_debug("czi_rescale_info_U16_to_U8, need to shift dynamic");
+        // Shift the dynamic to keep data in the destination range
+        cri->shift = UCHAR_MAX - (double)max_value;
+        cri->slope = 1;
+    }
+    else {
+        //g_debug("czi_rescale_info_U16_to_U8, keep default");
+        // Default is to keep dynamic shift and to have a slope of 1
+        cri->shift = 0;
+        cri->slope = 1;
+    }
+        
+    return cri;
+}
+
+//--- pixel converters ---------------------------------------------------------
+G_LOCK_DEFINE(_czi_converter_hash_table);
+GHashTable * _czi_converter_hash_table = NULL;
+
+uint32_t czi_pixel_converter_uid(
+                                  enum czi_pixel_t                  src_type,
+                                  enum czi_pixel_t                  dest_type) {
+   return czi_uid_S32(0, (uint8_t)dest_type, 0, (uint8_t)src_type);
+}
+
+GHashTable * czi_pixel_converter_hash_table(GError           ** err) {
+    
+    if (!_czi_converter_hash_table) {
+        //g_debug("czi_new_pixel_converter_hash_table");
+        G_LOCK(_czi_converter_hash_table);
+         _czi_converter_hash_table = g_hash_table_new_full(
+                    &g_int_hash,
+                    &g_int_equal,
+                    (void(*)(gpointer)) &czi_free_S32, 
+                    (void(*)(gpointer)) NULL // No need to free converters as they
+                                            // are allocated statically
+        );
+
+        // Insert each convert into converters g_hash_table
+        g_hash_table_insert(
+            _czi_converter_hash_table,
+            czi_new_S32(
+                czi_pixel_converter_uid(BGR_24, BGRA_32),
+                err),
+            (gpointer)&_czi_pixel_converter_BGR_24_to_BGRA_32
+        );
+        
+        g_hash_table_insert(
+            _czi_converter_hash_table,
+            czi_new_S32(
+                czi_pixel_converter_uid(BGRA_32, BGRA_32),
+                err),
+            (gpointer)&_czi_pixel_converter_BGRA_32_to_BGRA_32
+        );
+        
+        g_hash_table_insert(
+            _czi_converter_hash_table,
+            czi_new_S32(
+                czi_pixel_converter_uid(BGR_48, BGRA_32),
+                err),
+            (gpointer)&_czi_pixel_converter_BGR_48_to_BGRA_32
+        );
+        
+        g_hash_table_insert(
+            _czi_converter_hash_table,
+            czi_new_S32(
+                czi_pixel_converter_uid(BGR_96_FLOAT, BGRA_32),
+                err),
+            (gpointer)&_czi_pixel_converter_BGR_96_FLOAT_to_BGRA_32
+        );
+        
+        g_hash_table_insert(
+            _czi_converter_hash_table,
+            czi_new_S32(
+                czi_pixel_converter_uid(BGR_192_COMPLEX_FLOAT, BGRA_32),
+                err),
+            (gpointer)&_czi_pixel_converter_BGR_192_COMPLEX_FLOAT_to_BGRA_32
+        );
+        
+        G_UNLOCK(_czi_converter_hash_table);
+    }
+    return _czi_converter_hash_table;
+}
+
+const struct _czi_pixel_converter * czi_get_pixel_converter( 
+    enum czi_pixel_t src_pixel_type,
+    enum czi_pixel_t dest_pixel_type
+) {
+     GHashTable * converters = czi_pixel_converter_hash_table(0);
+     
+     return (const struct _czi_pixel_converter *)g_hash_table_lookup(
+                                    converters,
+                                    czi_new_S32(
+                                        czi_pixel_converter_uid(src_pixel_type,
+                                                                dest_pixel_type),
+                                        0)
+                                  );
+}
+
+void czi_pixel_convert_multichannel(
+                        const struct _czi_channel_converter  * cpc,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        uint8_t                                channel_count,
+                        GError                              ** err) {
+    uint8_t src_channel_size = czi_data_type_size(cpc->src_channel_type),
+            dest_channel_size = czi_data_type_size(cpc->dest_channel_type);
+    for (uint8_t c = 0; (c < channel_count); ++c) {
+        cpc->convert(cpc, cri, src_buffer, dest_buffer, err);
+        src_buffer += src_channel_size;
+        dest_buffer += dest_channel_size;
+    }
+}
+
+void czi_pixel_convert_BGR_24_to_BGRA_32(
+                        const struct _czi_pixel_converter    * cpc           G_GNUC_UNUSED,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err) {   
+    czi_pixel_convert_multichannel(
+        &_czi_channel_converter_U8_to_U8,
+        cri,
+        src_buffer, 
+        dest_buffer,
+        _openslide_czi_pixel_type_channel_count(cpc->src_pixel_type),
+        err
+    );
+    
+    *(dest_buffer + 3) = 255;
+}
+
+void czi_pixel_convert_BGRA_32_to_BGRA_32(
+                        const struct _czi_pixel_converter    * cpc           G_GNUC_UNUSED,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err) {
+    czi_pixel_convert_multichannel(
+        &_czi_channel_converter_U8_to_U8,
+        cri,
+        src_buffer, 
+        dest_buffer,
+        _openslide_czi_pixel_type_channel_count(cpc->src_pixel_type),
+        err
+    );
+}
+
+void czi_pixel_convert_BGR_48_to_BGRA_32(
+                        const struct _czi_pixel_converter    * cpc           G_GNUC_UNUSED,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err) {
+    /*
+     g_debug("czi_pixel_convert_BGR_48_to_BGRA_32:: src_buffer %x, dest_buffer %x, channel count %d", 
+             src_buffer,
+             dest_buffer,
+             _openslide_czi_pixel_type_channel_count(cpc->src_pixel_type));
+     g_debug("czi_pixel_convert_BGR_48_to_BGRA_32:: pixel values: %d, %d, %d", 
+             *((uint16_t*)(src_buffer)), 
+             *((uint16_t*)(src_buffer + 1)), 
+             *((uint16_t*)(src_buffer + 2)));
+             */
+    czi_pixel_convert_multichannel(
+        &_czi_channel_converter_U16_to_U8,
+        cri,
+        src_buffer, 
+        dest_buffer,
+        _openslide_czi_pixel_type_channel_count(cpc->src_pixel_type),
+        err
+    );
+    
+    // Test 1 - BGRA: is the default
+//#define TEST_BRGA
+//#define TEST_RGBA
+//#define TEST_RBGA
+//#define TEST_GBRA
+//#define TEST_GRBA
+    
+#ifdef TEST_BRGA
+    // Test 2 - BRGA: R<=>G
+    *(dest_buffer + 3) = *(dest_buffer + 2);
+    *(dest_buffer + 2) = *(dest_buffer + 1);
+    *(dest_buffer + 1) = *(dest_buffer + 3);
+#endif
+    
+#ifdef TEST_RGBA
+    // Test 3 - RGBA: R<=>B
+    *(dest_buffer + 3) = *(dest_buffer);
+    *(dest_buffer) = *(dest_buffer + 2);
+    *(dest_buffer + 2) = *(dest_buffer + 3);
+#endif
+
+#ifdef TEST_RBGA    
+    // Test 4 - RBGA: G<=>R R<=>B
+    *(dest_buffer + 3) = *(dest_buffer + 2);
+    *(dest_buffer + 2) = *(dest_buffer + 1);
+    *(dest_buffer + 1) = *(dest_buffer + 3);
+    
+    *(dest_buffer + 3) = *(dest_buffer);
+    *(dest_buffer) = *(dest_buffer + 1);
+    *(dest_buffer + 1) = *(dest_buffer + 3);
+#endif
+    
+#ifdef TEST_GBRA
+    // Test 5 - GBRA: G<=>B
+    *(dest_buffer + 3) = *(dest_buffer);
+    *(dest_buffer) = *(dest_buffer + 1);
+    *(dest_buffer + 1) = *(dest_buffer + 3);
+#endif
+    
+#ifdef TEST_GRBA
+    // Test 6 - GRBA: G<=>B R<=>B  
+    *(dest_buffer + 3) = *(dest_buffer);
+    *(dest_buffer) = *(dest_buffer + 1);
+    *(dest_buffer + 1) = *(dest_buffer + 3);
+    
+    *(dest_buffer + 3) = *(dest_buffer + 2);
+    *(dest_buffer + 2) = *(dest_buffer + 1);
+    *(dest_buffer + 1) = *(dest_buffer + 3);
+#endif    
+    *(dest_buffer + 3) = 255;
+    
+    /*
+     g_debug("czi_pixel_convert_BGR_48_to_BGRA_32:: converted pixel values: %d, %d, %d, %d", 
+             *(dest_buffer), 
+             *(dest_buffer + 1), 
+             *(dest_buffer + 2),
+             *(dest_buffer + 3));    
+    */
+}
+
+void czi_pixel_convert_BGR_96_FLOAT_to_BGRA_32(
+                        const struct _czi_pixel_converter    * cpc           G_GNUC_UNUSED,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err) {
+    czi_pixel_convert_multichannel(
+        &_czi_channel_converter_FLOAT_to_U8,
+        cri,
+        src_buffer, 
+        dest_buffer,
+        _openslide_czi_pixel_type_channel_count(cpc->src_pixel_type),
+        err
+    );
+    
+    *(dest_buffer + 3) = 255;
+}
+
+void czi_pixel_convert_BGR_192_COMPLEX_FLOAT_to_BGRA_32(
+                        const struct _czi_pixel_converter    * cpc           G_GNUC_UNUSED,
+                        const struct _czi_rescale_info       * cri,
+                        uint8_t                              * src_buffer,
+                        uint8_t                              * dest_buffer,
+                        GError                              ** err) {
+    czi_pixel_convert_multichannel(
+        &_czi_channel_converter_CFLOAT_to_U8,
+        cri,
+        src_buffer, 
+        dest_buffer,
+        _openslide_czi_pixel_type_channel_count(cpc->src_pixel_type),
+        err
+    );
+    
+    *(dest_buffer + 3) = 255;
+}
+
 //--- check ------------------------------------------------------------------
 bool _openslide_czi_is_zisraw( const char * filename, GError ** err )
 {
@@ -2523,6 +4523,31 @@ uint8_t _openslide_czi_pixel_type_size( enum czi_pixel_t type ) {
 
     case BGR_192_COMPLEX_FLOAT:
       return 24;
+
+    default:
+      return 0;
+  }
+}
+
+
+uint8_t _openslide_czi_pixel_type_channel_count( enum czi_pixel_t type ) {
+  switch(type) {
+    case GRAY_8:
+    case GRAY_16:
+    case GRAY_32:
+    case GRAY_32_FLOAT:
+    case GRAY_64:
+    case GRAY_64_COMPLEX_FLOAT:
+      return 1;
+
+    case BGR_24:
+    case BGR_48:
+    case BGR_96_FLOAT:
+    case BGR_192_COMPLEX_FLOAT:
+      return 3;
+
+    case BGRA_32:
+      return 4;
 
     default:
       return 0;
@@ -2758,25 +4783,6 @@ GList * _openslide_czi_get_level_tiles(
   return extern_list;
 }
 
-void _openslide_czi_pixel_copy( uint8_t * src,
-                                uint8_t * dest,
-                                int8_t src_pixel_type_size,
-                                int8_t dest_pixel_type_size,
-                                uint8_t default_value ) {
-  uint8_t *p, *d;
-
-  for ( int8_t c = 0; c < dest_pixel_type_size; ++c) {
-    d = (uint8_t *) (dest + c);
-    if ( c < src_pixel_type_size ) {
-      p = (uint8_t *) (src + c);
-      (*d) = (*p);
-    }
-    else {
-      (*d) = default_value;
-    }
-  }
-}
-
 uint8_t * _openslide_czi_data_convert_to_rgba32(
   enum czi_pixel_t            pixel_type,
   uint8_t                   * tile_data,
@@ -2791,13 +4797,14 @@ uint8_t * _openslide_czi_data_convert_to_rgba32(
   if (!tile_data) {
     g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                  "Unable to convert tile data to rgba32" );
-    g_debug( "_openslide_czi_data_convert_to_rgba32::tile_data is NULL" );
+    //g_debug( "_openslide_czi_data_convert_to_rgba32::tile_data is NULL" );
     return NULL;
   }
 
   // TODO: Add support for czi data types coded using more than 4 bytes
   int8_t czi_pixel_type_size = _openslide_czi_pixel_type_size( pixel_type );
-  if ((!czi_pixel_type_size) || (czi_pixel_type_size > 4)) {
+  // g_debug("_openslide_czi_data_convert_to_rgba32:: pixel type size %d", czi_pixel_type_size);
+  if ((!czi_pixel_type_size)/* || (czi_pixel_type_size > 4)*/) {
     g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                  "Unable to convert tile data to rgba32" );
     return NULL;
@@ -2816,18 +4823,60 @@ uint8_t * _openslide_czi_data_convert_to_rgba32(
   //          ", output_pixel_type_size: %d"
   //          ", czi_pixel_type_size: %d",
   //          tile_data_size, *converted_tile_data_size, output_pixel_type_size, czi_pixel_type_size );
-
-  int64_t i, j;
-  for ( i = 0, j = 0;
-        i < tile_data_size;
-        i += czi_pixel_type_size,
-        j += output_pixel_type_size ) {
-    _openslide_czi_pixel_copy( (uint8_t *) (tile_data + i),
-                               (uint8_t *) (converted_tile_data + j),
-                                czi_pixel_type_size,
-                                output_pixel_type_size,
-                                255 );
+  const struct _czi_pixel_converter * converter = czi_get_pixel_converter(
+                                                      pixel_type,
+                                                      BGRA_32
+                                                  );
+  if (!converter) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Unable to convert tile data to rgba" );
+    return NULL;
   }
+
+  struct _czi_rescale_info * ri = NULL;
+  const struct _czi_rescale_info_func * rif = czi_get_rescale_info_func(
+                                                  czi_data_type(pixel_type), 
+                                                  U8_TYPE
+                                              );
+  if (rif) {
+    g_debug("Rescaling dynamic while converting %s to %s",
+            czi_pixel_t_string(pixel_type),
+            czi_pixel_t_string(BGRA_32));
+    // In cases where precision is lost we try to resize data the best using
+    // an automatically pre calculated slope.
+    struct _czi_pixel_dynamic_info * pdi = czi_new_pixel_dynamic_info(pixel_type, err);
+    pdi->update(pdi, tile_data, tile_data_size, err);    
+    ri = rif->rescale_info(pdi, err);
+    g_debug("Rescale using shift %lf and slope %lf", 
+            ri->shift,
+            ri->slope);    
+  }
+  
+  for (uint32_t i = 0, j = 0;
+       i < (uint32_t)tile_data_size;
+       i += czi_pixel_type_size,
+       j += output_pixel_type_size) {
+//      g_debug("tile_data + %ld: %x, converted_tile_data + %ld: %x", 
+//              i, (uint8_t *) (tile_data + i),
+//              j, (uint8_t *) (converted_tile_data + j));
+//    g_debug("pixel values: %d, %d, %d", 
+//            *(((uint16_t*)tile_data) + i), 
+//            *(((uint16_t*)tile_data) + i + 1), 
+//            *(((uint16_t*)tile_data) + i + 2));
+    converter->convert(converter,
+                       ri,
+                       (uint8_t *)(tile_data + i),
+                       (uint8_t *)(converted_tile_data + j),
+                       err);
+//    g_debug("converted pixel values: %d, %d, %d, %d", 
+//             *(converted_tile_data + j), 
+//             *(converted_tile_data + j + 1), 
+//             *(converted_tile_data + j + 2),
+//             *(converted_tile_data + j + 3));    
+    
+  }
+
+  czi_free_rescale_info(ri);
 
   return converted_tile_data;
 }
@@ -3646,10 +5695,11 @@ bool zeiss_set_properties(
   if( !xml_buffer )
     return false;
 
-#ifdef ZEISS_WRITE_XML
+#ifdef CZI_WRITE_XML
   FILE * streamout = _openslide_fopen( "/tmp/zeiss.xml", "wb", 0 );
   fwrite( xml_buffer, xml_size, 1, streamout );
   fclose( streamout );
+  g_debug("XML data written to /tmp/zeiss.xml");
 #endif
 
   // convert xml
@@ -3902,11 +5952,19 @@ bool zeiss_set_properties(
   mpp = 0;
   mpp = _openslide_parse_double( (const char*)g_hash_table_lookup( osr->properties, ZEISS_VOXELSIZE_X ) );
   mpp *= 1e6;
+  if (mpp == 0){
+      g_debug("Size of pixels along X axis is unknown. Uses 1 as a default value.");
+      mpp = 1;
+  }
   g_hash_table_insert( osr->properties, g_strdup( OPENSLIDE_PROPERTY_NAME_MPP_X ), _openslide_format_double(mpp) );
 
   mpp = 0;
   mpp = _openslide_parse_double( (const char*)g_hash_table_lookup( osr->properties, ZEISS_VOXELSIZE_Y ) );
   mpp *= 1e6;
+  if (mpp == 0){
+      g_debug("Size of pixels along Y axis is unknown. Uses 1 as a default value.");
+      mpp = 1;
+  }
   g_hash_table_insert( osr->properties, g_strdup( OPENSLIDE_PROPERTY_NAME_MPP_Y ), _openslide_format_double(mpp) );
 
   _openslide_duplicate_int_prop( osr, ZEISS_MAGNIFICATION, OPENSLIDE_PROPERTY_NAME_OBJECTIVE_POWER );
@@ -4364,7 +6422,11 @@ bool zeiss_tileread(
       tile_data = internal_tile_data;
       data_size = internal_data_size;
     }
-
+    /*
+    g_debug("zeiss_tileread:: tile data %x, size %d",
+            tile_data,
+            data_size);
+    */
     // Convert tile data to RGBA_32 buffer that is used in cairo
     internal_tile_data = _openslide_czi_data_convert_to_rgba32(
                                       tile_desc->pixel_type,
@@ -4372,7 +6434,18 @@ bool zeiss_tileread(
                                       data_size,
                                       &internal_data_size,
                                       err );
-    //g_debug("zeiss_tileread:: converted data size %d", internal_data_size);
+    /*
+    g_debug("zeiss_tileread:: converted tile data %x, new size %d",
+            internal_tile_data,
+            internal_data_size);
+    
+    g_debug("zeiss_tileread:: converted tile data %d, %d, %d, %d",
+            *(internal_tile_data),
+            *(internal_tile_data + 1),
+            *(internal_tile_data + 2),
+            *(internal_tile_data + 3)
+           );
+    */
     if (tile_desc->compression != UNCOMPRESSED) {
       // Free uncompressed tile data
       g_slice_free1( data_size, tile_data );
@@ -4384,7 +6457,14 @@ bool zeiss_tileread(
                                            tile_desc->uid,
                                            err );
     }
-
+    /*
+    g_debug("zeiss_tileread:: converted tile data after free %d, %d, %d, %d",
+            *(internal_tile_data),
+            *(internal_tile_data + 1),
+            *(internal_tile_data + 2),
+            *(internal_tile_data + 3)
+           );
+    */
     if (!internal_tile_data) {
       g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                   "Unable to convert data to cairo format for tile uid: %ld",

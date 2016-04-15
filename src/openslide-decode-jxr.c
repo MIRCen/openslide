@@ -319,6 +319,10 @@ bool _openslide_jxr_decode_buffer(const void *data,
                                   int32_t h,
                                   GError **error) {
 #ifdef HAVE_LIBJXR
+  
+  //  JpegXr plugin today only support 24 bit BGR (3 x 8 bit) color 
+  //  TODO: Add support for float (32 bit), 24 bit (3x 16 bit) color,
+  //       8 bit and 16 bit greyscale
     
   struct jxr_decoder * os_jxr_decoder = openslide_jxr_decoder_new(error);
   os_jxr_decoder->initialize(os_jxr_decoder, datalen, w, h, error);
