@@ -64,6 +64,7 @@
 //   PRIVATE DEFINES
 //============================================================================
 #define CZI_DISPLAY_INDENT          2
+//#define CZI_DEBUG_STRUCTURE         1
 //#define CZI_DEBUG                   1
 //#define CZI_WRITE_TILE_DATA         1
 //#define CZI_WRITE_XML               1
@@ -1747,6 +1748,9 @@ bool czi_read_next_segment_header(
                      g_strerror(errno) );
         return false;
       }
+#ifdef CZI_DEBUG_STRUCTURE 
+      czi_display_segment_header(segmentheader, CZI_DISPLAY_INDENT * 1);
+#endif
       return true;
     }
     previous_pos = current_pos;
@@ -2453,7 +2457,11 @@ bool czi_read_file_header(
   TRY_READ_ITEMS( &(update_pending),                  1, 4, stream, err, "Failed to read file header: " );
   file_header->update_pending = (bool) update_pending;
   TRY_READ_ITEMS( &(file_header->attdir_position),    1, 8, stream, err, "Failed to read file header: " );
-
+  
+#if CZI_DEBUG_STRUCTURE
+  czi_display_file_header(file_header, CZI_DISPLAY_INDENT * 0);
+#endif
+  
   return true;
 }
 
@@ -2477,6 +2485,11 @@ bool czi_read_metadata(
   metadata->offset = (int64_t) ftello( stream );
   TRY_FSEEKO( stream, metadata->xml_size,        SEEK_CUR, err, "Failed to read metadata: " );  // skip xml block
   TRY_FSEEKO( stream, metadata->attachment_size, SEEK_CUR, err, "Failed to read metadata: " );  // skip att block
+  
+#if CZI_DEBUG_STRUCTURE
+  czi_display_metadata(metadata, CZI_DISPLAY_INDENT * 1);
+#endif
+  
   return true;
 }
 
@@ -2486,7 +2499,7 @@ bool czi_read_tile(
   GError             ** err
 )
 {
-  // g_debug( "czi_read_tile" );
+  //g_debug( "czi_read_tile" );
   g_assert( source );
   g_assert( source->stream );
   g_assert( tile );
@@ -2523,7 +2536,11 @@ bool czi_read_tile(
     tile->pyramid_type = PYR_UNKNOWN;
   TRY_FSEEKO( stream, 5, SEEK_CUR, err, "Failed to read tile: " );                          // Reserved
   TRY_READ_ITEMS( &dimension_count,     1, 4, stream, err, "Failed to read tile: " );
-
+  
+#if CZI_DEBUG_STRUCTURE
+  czi_display_tile(tile, CZI_DISPLAY_INDENT * 2);
+#endif
+    
   for( int32_t i=0; i<dimension_count; ++i )
   {
     struct _czi_dimension * new_dimension = czi_new_dimension( tile, err );
@@ -2556,7 +2573,11 @@ bool czi_read_dimension(
   TRY_READ_ITEMS( &(dimension->size),             1, 4, stream, err, "Failed to read dimension: " );
   TRY_READ_ITEMS( &(dimension->start_coordinate), 1, 4, stream, err, "Failed to read dimension: " );
   TRY_READ_ITEMS( &(dimension->stored_size),      1, 4, stream, err, "Failed to read dimension: " );
-
+  
+#if CZI_DEBUG_STRUCTURE
+  czi_display_dimension(dimension, CZI_DISPLAY_INDENT * 3);
+#endif
+  
   return true;
 }
 
@@ -6025,10 +6046,22 @@ bool zeiss_set_levels(
     }
     level = g_slice_alloc0( sizeof( struct _openslide_level ) );
     level->downsample = (double) subsampling;
+    
     w = g_hash_table_lookup( osr->properties, ZEISS_IMAGESIZE_X );
-    level->w = (int64_t)( _openslide_parse_double( w ) / level->downsample );
+    if (!w)
+      // Set level width to 0, to process it later
+      level->w = 0;
+    else
+      level->w = (int64_t)( _openslide_parse_double( w ) / level->downsample );
+    
     h = g_hash_table_lookup( osr->properties, ZEISS_IMAGESIZE_Y );
-    level->h = (int64_t)( _openslide_parse_double( h ) / level->downsample );
+    if (!h)
+       // Set level height to 0, to process it later
+      level->h = 0;
+    
+    else
+      level->h = (int64_t)( _openslide_parse_double( h ) / level->downsample );
+    
     if( !_openslide_czi_get_level_tile_size( czi, i, &tw, &th, err ) ) {
       g_slice_free( struct _openslide_level, level );
       osr->level_count = i;
@@ -6037,6 +6070,15 @@ bool zeiss_set_levels(
     }
     level->tile_w = (int64_t) tw;
     level->tile_h = (int64_t) th;
+    
+    // Set level sizes when the level contains only one tile
+    // and we were not able to read level dimensions
+    if (!level->w)
+        level->w = level->tile_w;
+        
+    if (!level->h)
+        level->h = level->tile_h;
+    
     g_ptr_array_add( array_levels, level );
   }
 
