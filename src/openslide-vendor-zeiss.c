@@ -4654,7 +4654,14 @@ bool _openslide_czi_get_level_tile_offset(
   GError                ** err
 )
 {
-//   g_debug("_openslide_czi_get_level_tile_offset:: level: %d, level_count: %d", level, czi->levels->len);
+  //g_debug("_openslide_czi_get_level_tile_offset:: level: %d, level_count: %d", level, czi->levels->len);
+  
+  if (level >= czi->levels->len) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to find level %d", level );
+    return false;
+  }
+    
   struct _czi_level * s_level = g_ptr_array_index( czi->levels, level );
   if( !s_level ) {
     g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
@@ -5947,11 +5954,16 @@ bool zeiss_set_properties(
   xmlXPathFreeContext( xml_path_context );
 
   //--- set openslide properties ---------------------------------------------
-
+  //--- parse voxel sizes ----------------------------------------------------
   double mpp;
+  const char *mppc;
+  
   mpp = 0;
-  mpp = _openslide_parse_double( (const char*)g_hash_table_lookup( osr->properties, ZEISS_VOXELSIZE_X ) );
-  mpp *= 1e6;
+  mppc = (const char*)g_hash_table_lookup( osr->properties, ZEISS_VOXELSIZE_X );
+  if (mppc) {
+    mpp = _openslide_parse_double(mppc);
+    mpp *= 1e6;
+  }
   if (mpp == 0){
       g_debug("Size of pixels along X axis is unknown. Uses 1 as a default value.");
       mpp = 1;
@@ -5959,14 +5971,18 @@ bool zeiss_set_properties(
   g_hash_table_insert( osr->properties, g_strdup( OPENSLIDE_PROPERTY_NAME_MPP_X ), _openslide_format_double(mpp) );
 
   mpp = 0;
-  mpp = _openslide_parse_double( (const char*)g_hash_table_lookup( osr->properties, ZEISS_VOXELSIZE_Y ) );
-  mpp *= 1e6;
+  mppc = (const char*)g_hash_table_lookup( osr->properties, ZEISS_VOXELSIZE_Y );
+  if (mppc) {
+    mpp = _openslide_parse_double(mppc);
+    mpp *= 1e6;
+  }
   if (mpp == 0){
       g_debug("Size of pixels along Y axis is unknown. Uses 1 as a default value.");
       mpp = 1;
   }
   g_hash_table_insert( osr->properties, g_strdup( OPENSLIDE_PROPERTY_NAME_MPP_Y ), _openslide_format_double(mpp) );
 
+  //--- parse other properties -----------------------------------------------
   _openslide_duplicate_int_prop( osr, ZEISS_MAGNIFICATION, OPENSLIDE_PROPERTY_NAME_OBJECTIVE_POWER );
 
   const char * bg = (const char *) g_hash_table_lookup( osr->properties, ZEISS_BG_COLOR );
