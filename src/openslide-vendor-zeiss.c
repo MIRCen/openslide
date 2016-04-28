@@ -4656,7 +4656,7 @@ bool _openslide_czi_get_level_tile_offset(
 {
   //g_debug("_openslide_czi_get_level_tile_offset:: level: %d, level_count: %d", level, czi->levels->len);
   
-  if (level >= czi->levels->len) {
+  if (level >= (int32_t)czi->levels->len) {
     g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                  "Failed to find level %d", level );
     return false;
