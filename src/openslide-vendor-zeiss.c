@@ -232,6 +232,7 @@ static bool               _openslide_czi_free_level_tile_data( _openslide_czi * 
 static void               _openslide_czi_free_list_tiles( GList * list );
 static uint8_t *          _openslide_czi_uncompress_tile( struct _openslide_czi_tile_descriptor * tile_desc, uint8_t * data, int32_t data_size, int32_t * uncompressed_data_size, GError ** err);
 static uint8_t *          _openslide_czi_load_tile( _openslide_czi * czi, int32_t level, int64_t uid, int32_t * buffer_size, GError **err );
+/*TODO*/static uint8_t *          _openslide_czi_load_attachment( _openslide_czi * czi, int32_t level, int64_t uid, int32_t * buffer_size, GError **err ) G_GNUC_UNUSED;
 static uint8_t *          _openslide_czi_data_convert_to_rgba32( enum czi_pixel_t pixel_type, uint8_t * tile_data, int32_t tile_data_size, int32_t * converted_tile_data_size, GError ** err);
 static uint8_t            _openslide_czi_pixel_type_size( enum czi_pixel_t );
 static uint8_t            _openslide_czi_pixel_type_channel_count( enum czi_pixel_t type );
@@ -686,6 +687,7 @@ static bool czi_find_sources( const char * filename, struct _czi * czi, GError *
 static bool czi_decode_one_stream( struct _czi_source * source, struct _czi * czi, GError ** err );
 static bool czi_add_file_header( struct _czi * czi, struct _czi_file_header * header, GError ** err );
 static bool czi_add_tile( struct _czi * czi, struct _czi_tile * tile, int32_t ss_x, int32_t ss_y, GError ** err );
+static bool czi_add_attachment( struct _czi * czi, struct _czi_attachment * attachment, GError ** err );
 static bool czi_update_bool_dimension( struct _czi * czi, char key, int32_t size, GError ** err );
 static bool czi_update_bool_compression( struct _czi * czi, enum czi_compression_t compression, GError ** err );
 static int32_t czi_cmp_level( const struct _czi_level ** l1, const struct _czi_level ** l2 );
@@ -697,7 +699,7 @@ static struct _czi_file_header                  * czi_new_file_header( struct _c
 static struct _czi_level                        * czi_new_level( struct _czi * czi, GError ** err );
 static struct _czi_roi                          * czi_new_roi( struct _czi * czi, GError ** err );
 static struct _czi_metadata                     * czi_new_metadata( struct _czi * czi, GError ** err );
-/*TODO*/static struct _czi_attachment           * czi_new_attachment( struct _czi * czi, GError ** err ) G_GNUC_UNUSED;
+static struct _czi_attachment                   * czi_new_attachment( struct _czi * czi, GError ** err );
 static struct _czi_tile                         * czi_new_tile( GError ** err );
 static struct _czi_dimension                    * czi_new_dimension( struct _czi_tile * tile, GError ** err );
 static int16_t                                  * czi_new_S16( int16_t integer, GError ** err ) G_GNUC_UNUSED;
@@ -714,7 +716,7 @@ static void czi_free_source(               struct _czi_source                   
 static void czi_free_file_header(          struct _czi_file_header               * ptr );
 static void czi_free_level(                struct _czi_level                     * ptr );
 static void czi_free_metadata(             struct _czi_metadata                  * ptr );
-static void czi_free_attachment(           struct _czi_attachment                * ptr ) G_GNUC_UNUSED;
+static void czi_free_attachment(           struct _czi_attachment                * ptr );
 static void czi_free_tile(                 struct _czi_tile                      * ptr );
 static void czi_free_dimension(            struct _czi_dimension                 * ptr );
 static void czi_free_roi(                  struct _czi_roi                       * ptr );
@@ -727,12 +729,13 @@ static void czi_free_accumulator(          struct _czi_accumulator              
 static void czi_free_rescale_info(         struct _czi_rescale_info      * ptr );
 
 //--- read -------------------------------------------------------------------
-static bool czi_parse_directory(  struct _czi_source * source, struct _czi * czi,                     GError ** err );
-/*TODO*/static bool czi_parse_attdir(     struct _czi_source * source, struct _czi * czi,                     GError ** err ) G_GNUC_UNUSED;
+static bool czi_parse_directory(  struct _czi_source * source, struct _czi             * czi,         GError ** err );
+static bool czi_parse_attdir(     struct _czi_source * source, struct _czi             * czi,         GError ** err );
 static bool czi_read_file_header( struct _czi_source * source, struct _czi_file_header * file_header, GError ** err );
-static bool czi_read_metadata(    struct _czi_source * source, struct _czi_metadata * metadata,       GError ** err );
-static bool czi_read_tile(        struct _czi_source * source, struct _czi_tile * tile,               GError ** err );
-static bool czi_read_dimension(   struct _czi_source * source, struct _czi_dimension * dimension,     GError ** err );
+static bool czi_read_metadata(    struct _czi_source * source, struct _czi_metadata    * metadata,    GError ** err );
+static bool czi_read_tile(        struct _czi_source * source, struct _czi_tile        * tile,        GError ** err );
+static bool czi_read_dimension(   struct _czi_source * source, struct _czi_dimension   * dimension,   GError ** err );
+static bool czi_read_attachment(  struct _czi_source * source, struct _czi_attachment  * attachment,  GError ** err );
 
 //--- enum string conversion ------------------------------------------------------
 static const char * czi_compression_t_string(       enum czi_compression_t compression_type );
@@ -749,8 +752,8 @@ static void czi_display_segment_header(       struct _czi_segment_header        
 static void czi_display_file_header(          struct _czi_file_header               * ptr, uint16_t alignment ) G_GNUC_UNUSED;
 static void czi_display_roi(                  struct _czi_roi                       * ptr, uint16_t alignment ) G_GNUC_UNUSED;
 static void czi_display_level(                struct _czi_level                     * ptr, uint16_t alignment ) G_GNUC_UNUSED;
-/*TODO*/static void czi_display_metadata(             struct _czi_metadata                  * ptr, uint16_t alignment ) G_GNUC_UNUSED;
-/*TODO*/static void czi_display_attachment(           struct _czi_attachment                * ptr, uint16_t alignment ) G_GNUC_UNUSED;
+static void czi_display_metadata(             struct _czi_metadata                  * ptr, uint16_t alignment ) G_GNUC_UNUSED;
+static void czi_display_attachment(           struct _czi_attachment                * ptr, uint16_t alignment ) G_GNUC_UNUSED;
 static void czi_display_tile(                 struct _czi_tile                      * ptr, uint16_t alignment ) G_GNUC_UNUSED;
 static void czi_display_dimension(            struct _czi_dimension                 * ptr, uint16_t alignment ) G_GNUC_UNUSED;
 static void czi_display_tile_descriptor(      struct _openslide_czi_tile_descriptor * ptr, uint16_t alignment ) G_GNUC_UNUSED;
@@ -873,56 +876,11 @@ static void czi_accumulator_max_accumulate_CFLOAT(
 );
 
 //--- pixel dynamic info -------------------------------------------------------
-//static int32_t czi_pixel_dynamic_info_updater_uid(
-//                        enum czi_pixel_t                       type);
-
 static void czi_pixel_dynamic_info_update(
                         struct _czi_pixel_dynamic_info       * pdi,
                         uint8_t                              * buffer,
                         uint64_t                               buffer_size,
                         GError                              ** err);
-
-/*
-static void czi_pixel_dynamic_info_update_min_max_multichannel(
-                        struct _czi_pixel_dynamic_info       * pdi,
-                        uint8_t                              * buffer
-);*/
-
-//static GHashTable * czi_pixel_dynamic_info_updater_hash_table(
-//                        GError                              ** err);
-
-//--- pixel dynamic info update min max ----------------------------------------
-/*
-void czi_pixel_dynamic_info_update_min_max_U8(
-                        struct _czi_pixel_dynamic_info       * pdi,
-                        uint8_t                              * buffer
-);
-
-void czi_pixel_dynamic_info_update_min_max_U16(
-                        struct _czi_pixel_dynamic_info       * pdi,
-                        uint8_t                              * buffer
-);
-
-void czi_pixel_dynamic_info_update_min_max_U32(
-                        struct _czi_pixel_dynamic_info       * pdi,
-                        uint8_t                              * buffer
-);
-
-void czi_pixel_dynamic_info_update_min_max_U64(
-                        struct _czi_pixel_dynamic_info       * pdi,
-                        uint8_t                              * buffer
-);
-
-void czi_pixel_dynamic_info_update_min_max_FLOAT(
-                        struct _czi_pixel_dynamic_info       * pdi,
-                        uint8_t                              * buffer
-);
-
-void czi_pixel_dynamic_info_update_min_max_CFLOAT(
-                        struct _czi_pixel_dynamic_info       * pdi,
-                        uint8_t                              * buffer
-);
-*/
 
 //--- converter ----------------------------------------------------------------
 static int32_t czi_uid_S32(
@@ -1074,6 +1032,7 @@ static void czi_channel_convert_CFLOAT_to_U8(
                         uint8_t                              * src_buffer,
                         uint8_t                              * dest_buffer,
                         GError                              ** err);
+
 //--- rescale info func --------------------------------------------------------
 static GHashTable * czi_rescale_info_func_hash_table(GError ** err);
 
@@ -1366,43 +1325,48 @@ bool czi_decode_one_stream(
     if (!czi_add_file_header(czi, file_header, err)) {
         g_debug("File_header was not added");
         czi_free_file_header(file_header);
-    }
-    
-    // go to metadata
-    if(fseeko( source->stream, file_header->metadata_position, SEEK_SET)) {
-        g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                    "Failed to seek metadata position %ld: %s",
-                    file_header->metadata_position, g_strerror(errno) );
-        g_slice_free( struct _czi_segment_header, header );
-        czi_free_file_header(file_header);
         return false;
     }
     
-    czi_read_next_segment_header(source, header, err);
-    
-    if( !strcmp( header->id, CZI_METADATA ) )
-    {
-      struct _czi_metadata * new_metadata = czi_new_metadata( czi, err );
-      if( !new_metadata )
-        return false;
-      g_ptr_array_add( czi->metadata, new_metadata );
-      if( !czi_read_metadata( source, new_metadata, err ) )
-        return false;
+    //--- metadata segment -----------------------------------------------------
+    if (file_header->metadata_position) {
+        // go to metadata
+        if(fseeko( source->stream, file_header->metadata_position, SEEK_SET)) {
+            g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                        "Failed to seek metadata position %ld: %s",
+                        file_header->metadata_position, g_strerror(errno) );
+            g_slice_free( struct _czi_segment_header, header );
+            czi_free_file_header(file_header);
+            return false;
+        }
+        
+        czi_read_next_segment_header(source, header, err);
+        
+        if( !strcmp( header->id, CZI_METADATA ) )
+        {
+        struct _czi_metadata * new_metadata = czi_new_metadata( czi, err );
+        if( !new_metadata )
+            return false;
+        g_ptr_array_add( czi->metadata, new_metadata );
+        if( !czi_read_metadata( source, new_metadata, err ) )
+            return false;
+        }
     }
     
-    // go to the subblock directory
-    if(fseeko( source->stream, file_header->directory_position, SEEK_SET)) {
-        g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                    "Failed to seek directory position %ld: %s",
-                    file_header->directory_position, g_strerror(errno) );
-        g_slice_free( struct _czi_segment_header, header );
-        czi_free_file_header(file_header);
-        return false;
-    }
-    
-    bool read_next_segment = true;
-    while (read_next_segment) {
-        read_next_segment = czi_read_next_segment_header(source, header, err);
+    //--- sublock directory segment --------------------------------------------
+    if (file_header->directory_position) {
+                
+        // go to the subblock directory
+        if(fseeko( source->stream, file_header->directory_position, SEEK_SET)) {
+            g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                        "Failed to seek directory position %ld: %s",
+                        file_header->directory_position, g_strerror(errno) );
+            g_slice_free( struct _czi_segment_header, header );
+            czi_free_file_header(file_header);
+            return false;
+        }
+        
+        czi_read_next_segment_header(source, header, err);
         
         if (!strcmp(header->id, CZI_DIRECTORY)) {
             if(!czi_parse_directory( source, czi, err )) {
@@ -1411,15 +1375,52 @@ bool czi_decode_one_stream(
             }
         }
         else {
-            break;
+            g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                        "Failed to read subblock directory at position %ld. "
+                        "Directory id %s is not consistent.",
+                        file_header->directory_position, header->id);
+            g_slice_free( struct _czi_segment_header, header );
+            czi_free_file_header(file_header);
+            return false;
         }
     }
     
-    // we assume error occuredbecause there are no segments left
-    g_slice_free( struct _czi_segment_header, header );
-    g_clear_error( err );
-    //err = NULL;
-
+    //--- attachment directory segment -----------------------------------------
+    if (file_header->attdir_position) {
+                
+        // go to the attachment directory
+        if(fseeko(source->stream, 
+                  file_header->attdir_position,
+                  SEEK_SET)) {
+            g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                        "Failed to seek attachment directory position %ld: %s",
+                        file_header->attdir_position, 
+                        g_strerror(errno));
+            g_slice_free(struct _czi_segment_header, header);
+            czi_free_file_header(file_header);
+            return false;
+        }
+        
+        czi_read_next_segment_header(source, header, err);
+        
+        if (!strcmp(header->id, CZI_ATTDIR)) {
+            if(!czi_parse_attdir( source, czi, err )) {
+                g_slice_free( struct _czi_segment_header, header );
+                return false;
+            }
+        }
+        else {
+            g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                        "Failed to read attachment directory at position %ld. "
+                        "Directory id %s is not consistent.",
+                        file_header->attdir_position, header->id);
+            g_slice_free( struct _czi_segment_header, header );
+            czi_free_file_header(file_header);
+            return false;
+        }
+    }
+    
+    g_slice_free( struct _czi_segment_header, header );    
   }
   else {
     // first segment in file must be the file header so we exit with error
@@ -1445,7 +1446,8 @@ bool czi_add_file_header(
     
     struct _czi_file_header* file_header;
     
-    // Check that file header was not registered yet
+    // Check that file header was not registered yet   
+    bool file_header_must_be_added = true;
     for( uint32_t i=0; i < czi->file_headers->len; ++i )
     {
         file_header = (struct _czi_file_header*) g_ptr_array_index(
@@ -1453,9 +1455,14 @@ bool czi_add_file_header(
                                                     i
                                                  );
         if (!compare_guid(file_header->file_guid, header->file_guid)) {
-            g_ptr_array_add(czi->file_headers, header);
-            return true;
+            file_header_must_be_added = false;
+            break;
         }
+    }
+    
+    if (file_header_must_be_added) {
+        g_ptr_array_add(czi->file_headers, header);
+        return true;
     }
     
     return false;
@@ -1655,6 +1662,18 @@ int32_t czi_cmp_level(
   }
   else
     return 1;
+}
+
+bool czi_add_attachment( struct _czi * czi, struct _czi_attachment * attachment, GError ** err                            G_GNUC_UNUSED) 
+{
+  // g_debug( "czi_add_attachment" );
+  g_assert( czi );
+  g_assert( attachment );
+  g_hash_table_insert( czi->attachments, 
+                       czi_new_S64(attachment->file_position, 0),
+                       attachment );
+  
+  return true;
 }
 
 //============================================================================
@@ -1869,7 +1888,11 @@ struct _czi * czi_new( GError ** err )
   czi->rois         = g_ptr_array_new_with_free_func( (void(*)(gpointer)) &czi_free_roi );
   czi->levels       = g_ptr_array_new_with_free_func( (void(*)(gpointer)) &czi_free_level );
   czi->metadata     = g_ptr_array_new_with_free_func( (void(*)(gpointer)) &czi_free_metadata );
-  //czi->attachments  = g_hash_table_new_full( (void(*)(gpointer)) &czi_free_attachment );
+  czi->attachments  = g_hash_table_new_full(
+                        &g_int64_hash,
+                        &g_int64_equal,
+                        (void(*)(gpointer)) &czi_free_S64,
+                        (void(*)(gpointer)) &czi_free_attachment );
   czi->grids        = g_hash_table_new_full(
                         &g_int_hash,
                         &g_int_equal,
@@ -1889,7 +1912,7 @@ struct _czi * czi_new( GError ** err )
 #endif
 
   if( !czi->sources  || ! czi->file_headers || !czi->levels ||
-      !czi->rois || !czi->metadata /*|| !czi->attachments*/ ) {
+      !czi->rois || !czi->metadata || !czi->attachments ) {
     czi_free( czi );
     g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                  "Failed to initiate _czi structure" );
@@ -1991,12 +2014,23 @@ struct _czi_metadata * czi_new_metadata( struct _czi * czi, GError ** err )
 }
 
 struct _czi_attachment * czi_new_attachment(
-  struct _czi * czi G_GNUC_UNUSED,
-  GError ** err     G_GNUC_UNUSED
+  struct _czi * czi,
+  GError     ** err
 )
 {
-  /*TODO*/
-  return NULL;
+  g_assert(czi);
+  
+  struct _czi_attachment * attachment = (struct _czi_attachment*) g_slice_alloc0( sizeof(struct _czi_attachment) );
+  
+  if( !attachment ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to allocate %ld bytes", sizeof(struct _czi_attachment) );
+    return NULL;
+  }
+  attachment->czi = czi;
+  attachment->data_size = 0;
+  attachment->data      = NULL;
+  return attachment;
 }
 
 struct _czi_tile * czi_new_tile( GError ** err )
@@ -2422,12 +2456,38 @@ bool czi_parse_directory(
 }
 
 bool czi_parse_attdir(
-  struct _czi_source  * source G_GNUC_UNUSED,
-  struct _czi         * czi    G_GNUC_UNUSED,
-  GError             ** err    G_GNUC_UNUSED
+  struct _czi_source  * source,
+  struct _czi         * czi,
+  GError             ** err
 )
 {
-  // TODO
+  //g_debug( "czi_parse_attdir" );
+  g_assert( source );
+  g_assert( source->stream );
+  g_assert( czi );
+
+  FILE * stream = source->stream;
+  int32_t entry_count;
+  struct _czi_attachment * new_attachment = NULL;
+  TRY_READ_ITEMS( &entry_count, 1, 4, stream, err, "Failed to parse attachment directory: " );
+  fseeko( stream, 252, SEEK_CUR );                       // 252 bytes reserved
+
+  for( int32_t i = 0; i < entry_count; ++i )
+  {
+    new_attachment = czi_new_attachment( czi, err );
+    if( !new_attachment ) return false;
+    if( !czi_read_attachment( source, new_attachment, err ) ) {
+      czi_free_attachment( new_attachment );
+      return false;
+    }
+
+    if( !czi_add_attachment( czi, new_attachment, err ) ) {
+      czi_free_attachment( new_attachment );
+      return false;
+    }
+    new_attachment = NULL;
+  }
+
   return true;
 }
 
@@ -2578,6 +2638,35 @@ bool czi_read_dimension(
   czi_display_dimension(dimension, CZI_DISPLAY_INDENT * 3);
 #endif
   
+  return true;
+}
+
+
+bool czi_read_attachment(
+  struct _czi_source        * source,
+  struct _czi_attachment    * attachment,
+  GError                   ** err
+)
+{
+  //g_debug( "czi_read_attachment" );
+  g_assert( source );
+  g_assert( source->stream );
+  g_assert( attachment );
+
+  attachment->source = source;
+  FILE * stream = source->stream;
+  
+  TRY_FSEEKO( stream, 2 + 10, SEEK_CUR, err, "Failed to read attachment: " ); // SchemaType + Reserved                        
+  TRY_READ_ITEMS( &(attachment->file_position),      1,  8, stream, err, "Failed to read attachment: " ); // FilePosition
+  TRY_READ_ITEMS( &(attachment->file_part),          1,  4, stream, err, "Failed to read attachment: " ); // FilePart
+  TRY_READ_ITEMS( &(attachment->content_guid),       1, 16, stream, err, "Failed to read attachment: " ); // ContentGuid
+  TRY_READ_ITEMS( &(attachment->content_file_type),  8,  1, stream, err, "Failed to read attachment: " ); // ContentFileType
+  TRY_READ_ITEMS( &(attachment->name),              80,  1, stream, err, "Failed to read attachment: " ); // Name
+  
+#if CZI_DEBUG_STRUCTURE
+  czi_display_attachment(attachment, CZI_DISPLAY_INDENT * 2);
+#endif
+
   return true;
 }
 
@@ -2818,7 +2907,7 @@ void czi_display_attachment( struct _czi_attachment * ptr,
 {
   // g_debug(  "czi_display_attachment");
   if( ptr ) {
-    fprintf( stdout, "%*s" "+ attachement:\n", alignment, "");
+    fprintf( stdout, "%*s" "+ attachment:\n", alignment, "");
     fprintf( stdout, "%*s" "- file_position: %ld\n",
                      alignment + CZI_DISPLAY_INDENT,
                      "",
@@ -5232,6 +5321,18 @@ bool _openslide_czi_destroy_metadata(
 }
 
 //--- attachments ------------------------------------------------------------
+uint8_t *          _openslide_czi_load_attachment(
+  _openslide_czi   * czi          G_GNUC_UNUSED,
+  int32_t            level        G_GNUC_UNUSED,
+  int64_t            uid          G_GNUC_UNUSED,
+  int32_t          * buffer_size  G_GNUC_UNUSED,
+  GError          ** err          G_GNUC_UNUSED
+)
+{
+  /*TODO*/
+  return NULL;
+}
+
 _openslide_czi * _openslide_czi_decode_label(
   _openslide_czi  * czi  G_GNUC_UNUSED,
   GError         ** err  G_GNUC_UNUSED
