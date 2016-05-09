@@ -1476,7 +1476,7 @@ bool czi_add_tile(
   GError           ** err
 )
 {
-  // g_debug( "czi_add_tile" );
+  //g_debug( "czi_add_tile" );
   g_assert( czi );
   g_assert( tile );
   struct _czi_level * level = NULL;
@@ -4697,8 +4697,9 @@ bool _openslide_czi_get_level_tile_size(
   GError                ** err
 )
 {
+  //g_debug("_openslide_czi_get_level_tile_size");
   struct _czi_level * s_level = (struct _czi_level *) g_ptr_array_index( czi->levels, level );
-  if( !s_level ) {
+  if( !s_level) {  
     g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                  "Failed to find level %d", level );
     return false;
@@ -4806,7 +4807,9 @@ bool _openslide_czi_get_level_tile_offset(
 
 struct _czi_tile * _openslide_czi_get_level_tile( _openslide_czi * czi, int32_t level, int64_t uid, GError **err )
 {
-    // Get czi level
+  //g_debug("_openslide_czi_get_level_tile");
+  
+  // Get czi level
   struct _czi_level * s_level = g_ptr_array_index( czi->levels, level );
   if( !s_level ) {
     g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
@@ -5122,6 +5125,8 @@ uint8_t * _openslide_czi_load_tile(
   GError         ** err
 )
 {
+  //g_debug("_openslide_czi_load_tile");
+  
   struct _czi_level * s_level = g_ptr_array_index( czi->levels, level );
   if( !s_level ) {
     g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
@@ -5554,6 +5559,18 @@ static bool zeiss_set_grids( openslide_t * osr, _openslide_czi * czi, GError ** 
 #define ZEISS_IMAGESIZE_M      "zeiss.information.image.size-m"
 #define ZEISS_IMAGESIZE_B      "zeiss.information.image.size-b"
 #define ZEISS_IMAGESIZE_V      "zeiss.information.image.size-v"
+#define ZEISS_IMAGEOFFSET_X    "zeiss.information.image.offset-x" // In microns
+#define ZEISS_IMAGEOFFSET_Y    "zeiss.information.image.offset-y" // In microns
+#define ZEISS_IMAGEOFFSET_C    "zeiss.information.image.offset-c" // In microns
+#define ZEISS_IMAGEOFFSET_Z    "zeiss.information.image.offset-z" // In microns
+#define ZEISS_IMAGEOFFSET_T    "zeiss.information.image.offset-t" // In microns
+#define ZEISS_IMAGEOFFSET_H    "zeiss.information.image.offset-h" // In microns
+#define ZEISS_IMAGEOFFSET_R    "zeiss.information.image.offset-r" // In microns
+#define ZEISS_IMAGEOFFSET_S    "zeiss.information.image.offset-s" // In microns
+#define ZEISS_IMAGEOFFSET_I    "zeiss.information.image.offset-i" // In microns
+#define ZEISS_IMAGEOFFSET_M    "zeiss.information.image.offset-m" // In microns
+#define ZEISS_IMAGEOFFSET_B    "zeiss.information.image.offset-b" // In microns
+#define ZEISS_IMAGEOFFSET_V    "zeiss.information.image.offset-v" // In microns
 #define ZEISS_ACQ_DATE         "zeiss.information.image.acquisition-date-and-time"
 #define ZEISS_ACQ_DURATION     "zeiss.information.image.acquisition-duration"
 #define ZEISS_PIXEL_TYPE       "zeiss.information.image.pixel-type"
@@ -5587,15 +5604,15 @@ static bool zeiss_set_grids( openslide_t * osr, _openslide_czi * czi, GError ** 
 #define ZEISS_OBJ_GEOM         "zeiss.information.instrument.objective[%d].pupil-geometry"
 #define ZEISS_OBJ_IMMERSION    "zeiss.information.instrument.objective[%d].immersion"
 
-#define ZEISS_SC_X             "zeiss.scaling.distance-x.value"
-#define ZEISS_SC_Y             "zeiss.scaling.distance-y.value"
+#define ZEISS_SC_X             "zeiss.scaling.distance-x.value" // In meters
+#define ZEISS_SC_Y             "zeiss.scaling.distance-y.value" // In meters
 
 #define ZEISS_ACQBLOCK_COUNT     "zeiss.experiment.acquisition-block-count"
 #define ZEISS_OVERLAP            "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.overlap"
 #define ZEISS_COVERING_MODE      "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region-covering-mode"
 #define ZEISS_TILEREGION_COUNT   "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region-count"
-#define ZEISS_TILEREGION_CENTER  "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region[%d].center-position"
-#define ZEISS_TILEREGION_CONTOUR "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region[%d].contour-size"
+#define ZEISS_TILEREGION_CENTER  "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region[%d].center-position" // In microns
+#define ZEISS_TILEREGION_CONTOUR "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region[%d].contour-size" // In microns
 #define ZEISS_TILEREGION_COLUMNS "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region[%d].columns"
 #define ZEISS_TILEREGION_ROWS    "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region[%d].rows"
 #define ZEISS_TILEREGION_Z       "zeiss.experiment.acquisition-block[%d].subdimension-setups.region-setup.sample-holder.tile-region[%d].z"
@@ -5848,6 +5865,35 @@ bool zeiss_set_properties(
   //--- set vendor properties ------------------------------------------------
   xmlXPathObject * xml_path_object = NULL;
 
+  // Scaling
+  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_SC_X,
+    "/ImageDocument/Metadata/Scaling/Items/Distance[@Id='X']/Value" );
+  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_SC_Y,
+    "/ImageDocument/Metadata/Scaling/Items/Distance[@Id='Y']/Value" );
+  
+  double mppx = 0, mppy = 0;
+  const char *mppc;
+
+  mppc = (const char*)g_hash_table_lookup( osr->properties, ZEISS_VOXELSIZE_X );
+  if (mppc) {
+    mppx = _openslide_parse_double(mppc);
+    mppx *= 1e6;
+  }
+  if (mppx == 0){
+      g_debug("Size of pixels along X axis is unknown. Uses 1 as a default value.");
+      mppx = 1;
+  }
+
+  mppc = (const char*)g_hash_table_lookup( osr->properties, ZEISS_VOXELSIZE_Y );
+  if (mppc) {
+    mppy = _openslide_parse_double(mppc);
+    mppy *= 1e6;
+  }
+  if (mppy == 0){
+      g_debug("Size of pixels along Y axis is unknown. Uses 1 as a default value.");
+      mppy = 1;
+  }
+  
   // Information / Image
   _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_IMAGESIZE_X,
     "/ImageDocument/Metadata/Information/Image/SizeX" );
@@ -5881,6 +5927,18 @@ bool zeiss_set_properties(
     "/ImageDocument/Metadata/Information/Image/PixelType" );
   _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_BIT_COUNT,
     "/ImageDocument/Metadata/Information/Image/ComponentBitCount" );
+  
+  // Get offset in pixels
+  int32_t ox = 0, oy = 0;
+  _openslide_czi_get_level_tile_offset(czi, 0, &ox, &oy, err);
+  
+  g_hash_table_insert(osr->properties, 
+                      g_strdup(ZEISS_IMAGEOFFSET_X),
+                      _openslide_format_double(mppx * ox));
+  
+  g_hash_table_insert(osr->properties, 
+                      g_strdup(ZEISS_IMAGEOFFSET_Y),
+                      _openslide_format_double(mppy * oy));
   
   // Information / Image / Compression
   g_hash_table_insert( osr->properties,
@@ -5996,12 +6054,6 @@ bool zeiss_set_properties(
       "/Immersion", i );
   }
 
-  // Scaling
-  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_SC_X,
-    "/ImageDocument/Metadata/Scaling/Items/Distance[@Id='X']/Value" );
-  _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_SC_Y,
-    "/ImageDocument/Metadata/Scaling/Items/Distance[@Id='Y']/Value" );
-
   // Experiment / AcquisitionBlocks
   int32_t block_count = 0;
   xml_path_object = xmlXPathEvalExpression(BAD_CAST
@@ -6077,32 +6129,8 @@ bool zeiss_set_properties(
 
   //--- set openslide properties ---------------------------------------------
   //--- parse voxel sizes ----------------------------------------------------
-  double mpp;
-  const char *mppc;
-  
-  mpp = 0;
-  mppc = (const char*)g_hash_table_lookup( osr->properties, ZEISS_VOXELSIZE_X );
-  if (mppc) {
-    mpp = _openslide_parse_double(mppc);
-    mpp *= 1e6;
-  }
-  if (mpp == 0){
-      g_debug("Size of pixels along X axis is unknown. Uses 1 as a default value.");
-      mpp = 1;
-  }
-  g_hash_table_insert( osr->properties, g_strdup( OPENSLIDE_PROPERTY_NAME_MPP_X ), _openslide_format_double(mpp) );
-
-  mpp = 0;
-  mppc = (const char*)g_hash_table_lookup( osr->properties, ZEISS_VOXELSIZE_Y );
-  if (mppc) {
-    mpp = _openslide_parse_double(mppc);
-    mpp *= 1e6;
-  }
-  if (mpp == 0){
-      g_debug("Size of pixels along Y axis is unknown. Uses 1 as a default value.");
-      mpp = 1;
-  }
-  g_hash_table_insert( osr->properties, g_strdup( OPENSLIDE_PROPERTY_NAME_MPP_Y ), _openslide_format_double(mpp) );
+  g_hash_table_insert( osr->properties, g_strdup( OPENSLIDE_PROPERTY_NAME_MPP_X ), _openslide_format_double(mppx) );
+  g_hash_table_insert( osr->properties, g_strdup( OPENSLIDE_PROPERTY_NAME_MPP_Y ), _openslide_format_double(mppy) );
 
   //--- parse other properties -----------------------------------------------
   _openslide_duplicate_int_prop( osr, ZEISS_MAGNIFICATION, OPENSLIDE_PROPERTY_NAME_OBJECTIVE_POWER );
@@ -6137,7 +6165,7 @@ bool zeiss_set_levels(
   GPtrArray * array_levels = g_ptr_array_sized_new( level_count );
   struct _openslide_level * level;
 
-  for( int32_t i=0; i<level_count; ++i )
+  for( int32_t i = 0; i < level_count; ++i )
   {
     subsampling = _openslide_czi_get_level_subsampling( czi, i, err );
     if( subsampling == 0 ) {
@@ -6164,13 +6192,19 @@ bool zeiss_set_levels(
       level->h = (int64_t)( _openslide_parse_double( h ) / level->downsample );
     
     if( !_openslide_czi_get_level_tile_size( czi, i, &tw, &th, err ) ) {
-      g_slice_free( struct _openslide_level, level );
-      osr->level_count = i;
-      zeiss_destroy( osr );
-      return false;
+      if (level != 0) {
+        g_slice_free( struct _openslide_level, level );
+        osr->level_count = i;
+        zeiss_destroy( osr );
+        return false;
+      }
+      
+      // In this case, it can be a single tile image witout levels
     }
-    level->tile_w = (int64_t) tw;
-    level->tile_h = (int64_t) th;
+    else {
+      level->tile_w = (int64_t) tw;
+      level->tile_h = (int64_t) th;
+    }
     
     // Set level sizes when the level contains only one tile
     // and we were not able to read level dimensions
@@ -6747,12 +6781,12 @@ bool zeiss_open(
   osr->data = (void*) czi_descriptor;
   osr->ops = &_openslide_ops_zeiss;
 
-
+/*
   int32_t ox, oy;
   if (!_openslide_czi_get_level_tile_offset(czi_descriptor, 0, &ox, &oy, err)) {
     return false;
   }
-
+*/
   //g_debug( "zeiss_open, ox: %d, oy: %d", ox, oy );
 
   return true;
