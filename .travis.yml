@@ -11,3 +11,5 @@ install:
 # install JPEGXR library
  - git clone https://git01.codeplex.com/jxrlib
  - pushd jxrlib && sudo SHARED=1 make install && popd
+ - echo $PWD
+ - ls -al nsouedet/openslide
