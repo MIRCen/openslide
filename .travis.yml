@@ -4,6 +4,7 @@ language: c
 before_install:
  - sudo apt-get -qq update
  - sudo apt list *sqlite*
+ - sudo apt-get install -y libsqlite3-0 libsqlite3-dev sqlite3
  - sudo apt-get install -y libxml2 libxml2-dev
  - sudo apt-get install -y libopenjpeg2 libopenjpeg-dev 
  - sudo apt-get install -y libgdk-pixbuf2.0-common libgdk-pixbuf2.0-0 libgdk-pixbuf2.0-dev
