@@ -1,9 +1,7 @@
 language: c
-#sudo: false
 
 before_install:
  - sudo apt-get -qq update
- - sudo apt list *sqlite*
  - sudo apt-get install -y libsqlite3-0 libsqlite3-dev sqlite3
  - sudo apt-get install -y libxml2 libxml2-dev
  - sudo apt-get install -y libopenjpeg2 libopenjpeg-dev 
@@ -13,8 +11,3 @@ install:
 # install JPEGXR library
  - git clone https://git01.codeplex.com/jxrlib
  - pushd jxrlib && SHARED=1 make install && popd
-
-#rvm:
-# - 2.2
-# - jruby
-# - rbx-2
