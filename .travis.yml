@@ -10,4 +10,4 @@ before_install:
 install:
 # install JPEGXR library
  - git clone https://git01.codeplex.com/jxrlib
- - pushd jxrlib && SHARED=1 make install && popd
+ - sudo 'pushd jxrlib && SHARED=1 make install && popd'
