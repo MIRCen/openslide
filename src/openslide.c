@@ -503,7 +503,25 @@ static bool read_region(openslide_t *osr,
 
   // saturate those seams away!
   cairo_set_operator(cr, CAIRO_OPERATOR_SATURATE);
-
+  
+  uint8_t r = 0, g = 0, b = 0;
+  
+  if (_openslide_get_background_color_prop(osr, &r, &g, &b))
+  {
+    // Draw background using background color
+    g_debug("Drawing background using color %d, %d, %d", r, g, b);
+    cairo_set_source_rgba( cr, 
+                           1.0 / 255 * r, 
+                           1.0 / 255 * g, 
+                           1.0 / 255 * b, 
+                           1.0);
+    cairo_rectangle(cr, 0, 0, w, h);
+    cairo_fill(cr);
+  
+    cairo_set_operator(cr, CAIRO_OPERATOR_ATOP);
+    cairo_set_source_rgba(cr, 0, 0, 0, 1.0);
+  }
+  
   if (level_in_range(osr, level)) {
     struct _openslide_level *l = osr->levels[level];
 

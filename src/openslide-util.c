@@ -301,6 +301,34 @@ void _openslide_set_background_color_prop(openslide_t *osr,
                       g_strdup_printf("%.02X%.02X%.02X", r, g, b));
 }
 
+bool _openslide_get_background_color_prop(openslide_t *osr,
+                                          uint8_t *r, 
+                                          uint8_t *g,
+                                          uint8_t *b) {
+  const char * bg = g_hash_table_lookup(osr->properties,
+                                        OPENSLIDE_PROPERTY_NAME_BACKGROUND_COLOR);
+  if( bg == NULL)
+      return false;
+  
+  if( strlen(bg) < 6 )
+      return false;
+  
+  uint8_t orig = 0;
+  if( strlen(bg) == 8 ) orig = 2;
+  char * red = g_strndup( bg+orig, 2 );
+  char * green = g_strndup( bg+orig+2, 2 );
+  char * blue = g_strndup( bg+orig+4, 2 );
+  
+  *r = (uint8_t)strtol(red,NULL,16);
+  *g = (uint8_t)strtol(green,NULL,16);
+  *b = (uint8_t)strtol(blue,NULL,16);
+  
+  g_free( red );
+  g_free( green );
+  g_free( blue );
+  
+}
+
 void _openslide_set_bounds_props_from_grid(openslide_t *osr,
                                            struct _openslide_grid *grid) {
   g_return_if_fail(g_hash_table_lookup(osr->properties,

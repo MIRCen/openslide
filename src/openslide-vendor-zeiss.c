@@ -223,9 +223,10 @@ static bool _openslide_czi_has_data_systemspec( _openslide_czi * czi );
 static int32_t            _openslide_czi_get_roi_count( _openslide_czi * czi ) G_GNUC_UNUSED;
 static int32_t            _openslide_czi_get_level_count( _openslide_czi * czi );
 static int32_t            _openslide_czi_get_level_subsampling( _openslide_czi * czi, int32_t level, GError **err );
+static bool               _openslide_czi_get_level_offset( _openslide_czi * czi, int32_t level, int32_t * x, int32_t * y, GError ** err );
+static bool               _openslide_czi_get_level_size( _openslide_czi * czi, int32_t level, int32_t * w, int32_t * h, GError ** err );
 static struct _czi_tile * _openslide_czi_get_level_tile( _openslide_czi * czi, int32_t level, int64_t uid, GError **err );
 static bool               _openslide_czi_get_level_tile_size( _openslide_czi * czi, int32_t level, int32_t * w, int32_t * h, GError ** err );
-static bool               _openslide_czi_get_level_tile_offset( _openslide_czi * czi, int32_t level, int32_t * x, int32_t * y, GError ** err );
 static uint8_t *          _openslide_czi_get_level_tile_data( _openslide_czi * czi, int32_t level, int64_t uid, int32_t * buffer_size, GError **err );
 static GList   *          _openslide_czi_get_level_tiles( _openslide_czi * czi, int32_t level, GError **err );
 static bool               _openslide_czi_free_level_tile_data( _openslide_czi * czi, int32_t level, int64_t uid, GError **err );
@@ -2406,7 +2407,8 @@ bool czi_parse_directory(
 
   TRY_READ_ITEMS( &entry_count, 1, 4, stream, err, "Failed to parse directory: " );
   fseeko( stream, 124, SEEK_CUR );                       // 124 bytes reserved
-
+  //g_debug( "czi_parse_directory: entry count %d", entry_count );
+  
   for( int32_t i=0; i<entry_count; ++i )
   {
     new_tile = czi_new_tile( err );
@@ -2416,6 +2418,9 @@ bool czi_parse_directory(
       return false;
     }
 
+    int32_t dim_size_x, dim_stored_size_x,
+            dim_size_y, dim_stored_size_y;
+    
     dim = (struct _czi_dimension*) g_hash_table_lookup( new_tile->dimensions, "X" );
     if( !dim ) {
       g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
@@ -2423,7 +2428,9 @@ bool czi_parse_directory(
       czi_free_tile( new_tile );
       return false;
     }
-    ss_x = dim->size / dim->stored_size;
+    dim_size_x = dim->size;
+    dim_stored_size_x = dim->stored_size;    
+    ss_x = dim_size_x / dim_stored_size_x;
     ptr_S32 = (int32_t*) (uid+4);
     *ptr_S32 = dim->start;
     //new_tile->uid = (uint64_t)( dim->start );
@@ -2435,13 +2442,24 @@ bool czi_parse_directory(
       czi_free_tile( new_tile );
       return false;
     }
-    ss_y = dim->size / dim->stored_size;
+    dim_size_y = dim->size;
+    dim_stored_size_y = dim->stored_size;
+    ss_y = dim_size_y / dim_stored_size_y;
     ptr_S32 = (int32_t*) (uid);
     *ptr_S32 = dim->start;
     //new_tile->uid = (new_tile->uid) | ( (uint64_t)(dim->start) << 4 );
 
     ptr_S64 = (int64_t *) uid;
     new_tile->uid = *ptr_S64;
+    
+    //g_debug("czi_parse_directory: tile %ld, "
+    //        "size [%d, %d], stored_size [%d, %d], subsambling [%d, %d]",
+    //    new_tile->uid, 
+    //    dim_size_x, dim_size_y, 
+    //    dim_stored_size_x, dim_stored_size_y,
+    //    ss_x, ss_y
+    //);
+    
     if( !czi_add_tile( czi, new_tile, ss_x, ss_y, err ) ) {
       czi_free_tile( new_tile );
       return false;
@@ -4689,6 +4707,104 @@ int32_t _openslide_czi_get_level_subsampling(
   return s_level->subsampling_x;
 }
 
+bool _openslide_czi_get_level_size(
+  _openslide_czi         * czi,
+  int32_t                  level,
+  int32_t                * w,
+  int32_t                * h,
+  GError                ** err
+)
+{
+  //g_debug("_openslide_czi_get_level_tile_offset:: level: %d, level_count: %d", level, czi->levels->len);
+  
+  if (level >= (int32_t)czi->levels->len) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to find level %d", level );
+    return false;
+  }
+    
+  struct _czi_level * s_level = g_ptr_array_index( czi->levels, level );
+  if( !s_level ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to find level %d", level );
+    return false;
+  }
+
+  int32_t level_tiles_count = g_hash_table_size(s_level->tiles);
+  if( level_tiles_count <= 0 ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "No tiles in level %d", level );
+    return false;
+  }
+
+  *w = *(int32_t *) g_hash_table_lookup( s_level->size, "X" );
+//   g_debug("_openslide_czi_get_level_size:: s_level->size: %d", *w);
+  if( !w ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to load X size from level %d", level );
+    return false;
+  }
+  *h = *(int32_t *) g_hash_table_lookup( s_level->size, "Y" );
+//   g_debug("_openslide_czi_get_level_size:: s_level->size: %d", *h);
+  if( !h ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to load Y size from level %d", level );
+    return false;
+  }
+
+  return true;
+}
+
+// Get the offset to use for the level
+bool _openslide_czi_get_level_offset(
+  _openslide_czi         * czi,
+  int32_t                  level,
+  int32_t                * x,
+  int32_t                * y,
+  GError                ** err
+)
+{
+  //g_debug("_openslide_czi_get_level_offset:: level: %d, level_count: %d", level, czi->levels->len);
+  
+  if (level >= (int32_t)czi->levels->len) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to find level %d", level );
+    return false;
+  }
+    
+  struct _czi_level * s_level = g_ptr_array_index( czi->levels, level );
+  if( !s_level ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to find level %d", level );
+    return false;
+  }
+
+  int32_t level_tiles_count = g_hash_table_size(s_level->tiles);
+  if( level_tiles_count <= 0 ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "No tiles in level %d", level );
+    return false;
+  }
+
+  *x = *(int32_t *) g_hash_table_lookup( s_level->start, "X" );
+//   g_debug("_openslide_czi_get_level_offset:: s_level->start_x: %d", *x);
+  if( !x ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to load X start from level %d", level );
+    return false;
+  }
+  *y = *(int32_t *) g_hash_table_lookup( s_level->start, "Y" );
+//   g_debug("_openslide_czi_get_level_offset:: s_level->start_y: %d", *y);
+  if( !y ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to load Y start from level %d", level );
+    return false;
+  }
+
+  return true;
+}
+
+// Get the maximum width and height for tiles of a level
 bool _openslide_czi_get_level_tile_size(
   _openslide_czi         * czi,
   int32_t                  level,
@@ -4757,54 +4873,6 @@ bool _openslide_czi_get_level_tile_size(
   return true;
 }
 
-bool _openslide_czi_get_level_tile_offset(
-  _openslide_czi         * czi,
-  int32_t                  level,
-  int32_t                * x,
-  int32_t                * y,
-  GError                ** err
-)
-{
-  //g_debug("_openslide_czi_get_level_tile_offset:: level: %d, level_count: %d", level, czi->levels->len);
-  
-  if (level >= (int32_t)czi->levels->len) {
-    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                 "Failed to find level %d", level );
-    return false;
-  }
-    
-  struct _czi_level * s_level = g_ptr_array_index( czi->levels, level );
-  if( !s_level ) {
-    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                 "Failed to find level %d", level );
-    return false;
-  }
-
-  int32_t level_tiles_count = g_hash_table_size(s_level->tiles);
-  if( level_tiles_count <= 0 ) {
-    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                 "No tiles in level %d", level );
-    return false;
-  }
-
-  *x = *(int32_t *) g_hash_table_lookup( s_level->start, "X" );
-//   g_debug("_openslide_czi_get_level_tile_offset:: s_level->start_x: %d", *x);
-  if( !x ) {
-    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                 "Failed to load X start from level %d", level );
-    return false;
-  }
-  *y = *(int32_t *) g_hash_table_lookup( s_level->start, "Y" );
-//   g_debug("_openslide_czi_get_level_tile_offset:: s_level->start_y: %d", *y);
-  if( !y ) {
-    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                 "Failed to load Y start from level %d", level );
-    return false;
-  }
-
-  return true;
-}
-
 struct _czi_tile * _openslide_czi_get_level_tile( _openslide_czi * czi, int32_t level, int64_t uid, GError **err )
 {
   //g_debug("_openslide_czi_get_level_tile");
@@ -4830,7 +4898,7 @@ struct _czi_tile * _openslide_czi_get_level_tile( _openslide_czi * czi, int32_t 
 
 uint8_t * _openslide_czi_get_level_tile_data( _openslide_czi * czi, int32_t level, int64_t uid, int32_t * buffer_size, GError **err )
 {
-  //   g_debug("_openslide_czi_get_level_tile_offset:: level: %d, level_count: %d", level, czi->levels->len);
+  //   g_debug("_openslide_czi_get_level_tile_data:: level: %d, level_count: %d", level, czi->levels->len);
 
   // Get czi tile
   struct _czi_tile * tile = _openslide_czi_get_level_tile( czi, level, uid, err);
@@ -5893,6 +5961,8 @@ bool zeiss_set_properties(
       g_debug("Size of pixels along Y axis is unknown. Uses 1 as a default value.");
       mppy = 1;
   }
+  //g_debug("zeiss_set_properties: voxel sizes (micrometers) [%lf, %lf]",
+  //        mppx, mppy);
   
   // Information / Image
   _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_IMAGESIZE_X,
@@ -5928,9 +5998,53 @@ bool zeiss_set_properties(
   _openslide_xml_set_prop_from_xpath( osr, xml_path_context, ZEISS_BIT_COUNT,
     "/ImageDocument/Metadata/Information/Image/ComponentBitCount" );
   
+  // Update X and Y dimensions if not set to a valid value
+  char * value;
+  int32_t meta_width = 0, meta_height = 0,
+          w = 0, h = 0;
+  
+  // Try to read image width and height from meta information
+  ZEISS_GET_PROP( osr, ZEISS_IMAGESIZE_X, value );
+  if (value)
+    meta_width = _openslide_parse_double(value);
+  
+  ZEISS_GET_PROP( osr, ZEISS_IMAGESIZE_Y, value );
+  if (value)  
+    meta_height = _openslide_parse_double(value);
+
+  // Read real sizes
+  _openslide_czi_get_level_size(czi, 0, &w, &h, err);
+  
+  if (meta_width && (meta_width != w))
+    g_debug("width %d read from meta information differ from processed width %d",
+            meta_width, w
+    );
+
+  if (meta_height && (meta_height != h))
+    g_debug("height %d read from meta information differ from processed width %d",
+            meta_height, h
+    );
+    
+  // Update width property when missing in meta information
+  // or meta information is not consistent
+  if (!meta_width || (meta_width != w))
+    g_hash_table_insert(osr->properties, 
+                        g_strdup(ZEISS_IMAGESIZE_X),
+                       _openslide_format_double(w));
+    
+  // Update height property when missing in meta information
+  // or meta information is not consistent
+  if (!meta_height || (meta_height != h))
+    g_hash_table_insert(osr->properties, 
+                        g_strdup(ZEISS_IMAGESIZE_Y),
+                        _openslide_format_double(h));
+    
+  //g_debug("width: %d", w);
+  //g_debug("height: %d", h);
+  
   // Get offset in pixels
   int32_t ox = 0, oy = 0;
-  _openslide_czi_get_level_tile_offset(czi, 0, &ox, &oy, err);
+  _openslide_czi_get_level_offset(czi, 0, &ox, &oy, err);
   
   g_hash_table_insert(osr->properties, 
                       g_strdup(ZEISS_IMAGEOFFSET_X),
@@ -6021,6 +6135,16 @@ bool zeiss_set_properties(
     ZEISS_SET_PROP( osr, xml_path_context, ZEISS_CH_THCK,
       "/ImageDocument/Metadata/Information/Image/Dimensions/Channels/Channel[%d+1]"
       "/SectionThickness", i );
+    
+    // Fixes channel color to remove leading # character
+    ZEISS_GET_FORMATTED_PROP( osr, ZEISS_CH_COLOR, value, i );
+    
+    if (value && (strlen(value) > 0) && (value[0] == '#')) {
+      // Replaces channel color in properties 
+      g_hash_table_insert( osr->properties, 
+                           g_strdup_printf(ZEISS_CH_COLOR, i), 
+                           g_strdup(&value[1]) );
+    }
   }
 
   // Information / Instrument / Objectives
@@ -6138,8 +6262,8 @@ bool zeiss_set_properties(
   const char * bg = (const char *) g_hash_table_lookup( osr->properties, ZEISS_BG_COLOR );
   if( bg )
   {
-    uint8_t orig = 1;
-    if( strlen(bg) == 9 ) orig = 3;
+    uint8_t orig = 0;
+    if( strlen(bg) == 8 ) orig = 2;
     char * red = g_strndup( bg+orig, 2 );
     char * green = g_strndup( bg+orig+2, 2 );
     char * blue = g_strndup( bg+orig+4, 2 );
@@ -6153,6 +6277,7 @@ bool zeiss_set_properties(
   return true;
 }
 
+  
 bool zeiss_set_levels(
   openslide_t     * osr,
   _openslide_czi  * czi,
@@ -6165,9 +6290,16 @@ bool zeiss_set_levels(
   GPtrArray * array_levels = g_ptr_array_sized_new( level_count );
   struct _openslide_level * level;
 
+  // Get image size from stored properties
+  w = g_hash_table_lookup( osr->properties, ZEISS_IMAGESIZE_X );
+  h = g_hash_table_lookup( osr->properties, ZEISS_IMAGESIZE_Y );
+  
+  //g_debug("zeiss_set_levels: w [%s, %s]", w, h);
+    
   for( int32_t i = 0; i < level_count; ++i )
   {
     subsampling = _openslide_czi_get_level_subsampling( czi, i, err );
+    //g_debug("zeiss_set_levels:: level %d, subsampling %d", i, subsampling);
     if( subsampling == 0 ) {
       osr->level_count = i;
       zeiss_destroy( osr );
@@ -6175,21 +6307,10 @@ bool zeiss_set_levels(
     }
     level = g_slice_alloc0( sizeof( struct _openslide_level ) );
     level->downsample = (double) subsampling;
+    level->w = (int64_t)( _openslide_parse_double( w ) / level->downsample );   
+    level->h = (int64_t)( _openslide_parse_double( h ) / level->downsample );
     
-    w = g_hash_table_lookup( osr->properties, ZEISS_IMAGESIZE_X );
-    if (!w)
-      // Set level width to 0, to process it later
-      level->w = 0;
-    else
-      level->w = (int64_t)( _openslide_parse_double( w ) / level->downsample );
-    
-    h = g_hash_table_lookup( osr->properties, ZEISS_IMAGESIZE_Y );
-    if (!h)
-       // Set level height to 0, to process it later
-      level->h = 0;
-    
-    else
-      level->h = (int64_t)( _openslide_parse_double( h ) / level->downsample );
+    //g_debug("zeiss_set_levels:: level %d, sizes [%ld, %ld]", i, level->w, level->h);
     
     if( !_openslide_czi_get_level_tile_size( czi, i, &tw, &th, err ) ) {
       if (level != 0) {
@@ -6205,14 +6326,8 @@ bool zeiss_set_levels(
       level->tile_w = (int64_t) tw;
       level->tile_h = (int64_t) th;
     }
-    
-    // Set level sizes when the level contains only one tile
-    // and we were not able to read level dimensions
-    if (!level->w)
-        level->w = level->tile_w;
-        
-    if (!level->h)
-        level->h = level->tile_h;
+
+    //g_debug("zeiss_set_levels:: level %d, sizes [%ld, %ld]", i, level->w, level->h);
     
     g_ptr_array_add( array_levels, level );
   }
@@ -6376,7 +6491,7 @@ bool zeiss_set_grids( openslide_t     * osr,
       g_debug("zeiss_set_grids::level not found: %d", l);
 
     // Get level offset
-    _openslide_czi_get_level_tile_offset( czi, l, &offset_x, &offset_y, err );
+    _openslide_czi_get_level_offset( czi, l, &offset_x, &offset_y, err );
 
     // Instanciate new grid for current level
     //g_debug("zeiss_set_grids::level: %d, tile_w: %ld, tile_h: %ld", l, level->tile_w, level->tile_h);
@@ -6389,16 +6504,16 @@ bool zeiss_set_grids( openslide_t     * osr,
     // Get tiles for the level
     GList * level_tiles = _openslide_czi_get_level_tiles(czi, l, err);
     GList * current_tile = level_tiles;
-    //g_debug( "zeiss_set_grids::list of %d tiles for level %d", g_list_length( current_tile ), l );
+   // g_debug( "zeiss_set_grids::list of %d tiles for level %d", g_list_length( current_tile ), l );
 
     // Add level tiles to the level range grid
     while( current_tile ) {
       // Check that tile intersects region
       struct _openslide_czi_tile_descriptor * tile_desc = current_tile->data;
-     // g_debug("zeiss_set_grids::tile_desc: %lf, %lf, %lf, %lf, %d, %d",
-     //            (double)tile_desc->start_x, (double)tile_desc->start_y,
-     //            (double)tile_desc->size_x, (double)tile_desc->size_y,
-     //            tile_desc->subsampling_x, tile_desc->subsampling_y);
+//       g_debug("zeiss_set_grids::tile_desc: %lf, %lf, %lf, %lf, %d, %d",
+//                 (double)tile_desc->start_x, (double)tile_desc->start_y,
+//                 (double)tile_desc->size_x, (double)tile_desc->size_y,
+//                 tile_desc->subsampling_x, tile_desc->subsampling_y);
       _openslide_grid_range_add_tile( grid,
                                       (double)(tile_desc->start_x - offset_x) / level->downsample,
                                       (double)(tile_desc->start_y - offset_y) / level->downsample,
@@ -6477,7 +6592,7 @@ bool zeiss_paint_region(
   }
 
   int32_t offset_x, offset_y;
-  if (!_openslide_czi_get_level_tile_offset(czi, l, &offset_x, &offset_y, err)) {
+  if (!_openslide_czi_get_level_offset(czi, l, &offset_x, &offset_y, err)) {
     return false;
   }
 
@@ -6783,7 +6898,7 @@ bool zeiss_open(
 
 /*
   int32_t ox, oy;
-  if (!_openslide_czi_get_level_tile_offset(czi_descriptor, 0, &ox, &oy, err)) {
+  if (!_openslide_czi_get_level_offset(czi_descriptor, 0, &ox, &oy, err)) {
     return false;
   }
 */
