@@ -11,8 +11,8 @@ install:
 # install JPEGXR library
  - git clone https://git01.codeplex.com/jxrlib
  - pushd jxrlib && sudo SHARED=1 make install && popd
- - pushd /usr/lib && sudo ln -s jxrlib-1.1/lib/*.so ./ && popd
- - pushd /usr/lib/pkgconfig && sudo ln -s jxrlib-1.1/lib/pkgconfig/* ./ && popd
+ - pushd /usr/lib && sudo ln -s /usr/lib/jxrlib-1.1/lib/*.so ./ && popd
+ - pushd /usr/lib/pkgconfig && sudo ln -s /usr/lib/jxrlib-1.1/lib/pkgconfig/* ./ && popd
 
 script:
  - libtoolize --force && aclocal && autoheader && automake --force-missing --add-missing && autoconf
