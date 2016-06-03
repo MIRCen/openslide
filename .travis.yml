@@ -13,4 +13,4 @@ install:
  - pushd jxrlib && sudo SHARED=1 make install && popd
 
 script:
- - libtoolize --force && aclocal && autoheader && automake --force-missing --add-missing && autoconf && ./configure --prefix=/tmp/build/openslide-master-Ubuntu-14.04-x86_64-release && make install
+ - libtoolize --force && aclocal && autoheader && automake --force-missing --add-missing && autoconf && ./configure --prefix=${PWD}/openslide-master-Ubuntu-14.04-x86_64-release && make install
