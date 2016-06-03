@@ -334,7 +334,7 @@ bool _openslide_jxr_decode_buffer(const void *data,
 
 #else // HAVE_LIBJXR
 
-  g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+  g_set_error( error, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
                "Openslide is not able to decode JPEG XR" );
 
   return false;
