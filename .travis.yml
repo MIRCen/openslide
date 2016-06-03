@@ -24,7 +24,8 @@ install:
  - pushd /usr/lib && sudo ln -s /usr/lib/jxrlib-1.1/lib/*.so ./ && popd
  - pushd /usr/lib/pkgconfig && sudo ln -s /usr/lib/jxrlib-1.1/lib/pkgconfig/* ./ && popd
 # pyhton install for tests
- - pip install requests
+ - pip install --upgrade pip
+ - pip install -I requests==2.2.1
 
 script:
  - libtoolize --force && aclocal && autoheader && automake --force-missing --add-missing && autoconf
