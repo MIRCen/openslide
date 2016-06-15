@@ -1,9 +1,9 @@
-==================================================================================
+================================================================================
 OPENSLIDE: C library for reading virtual slide images (with CZI format support)
-==================================================================================
+================================================================================
 
-.. image:: https://api.travis-ci.org/nsouedet/openslide.svg?branch=master
-    :target: https://github.com/nsouedet/openslide/
+.. image:: https://api.travis-ci.org/mircen/openslide.svg?branch=master
+    :target: https://github.com/mircen/openslide/
 
 Documentation
 =============
