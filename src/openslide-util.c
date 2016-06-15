@@ -327,6 +327,7 @@ bool _openslide_get_background_color_prop(openslide_t *osr,
   g_free( green );
   g_free( blue );
   
+  return true;
 }
 
 void _openslide_set_bounds_props_from_grid(openslide_t *osr,

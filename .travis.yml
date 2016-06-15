@@ -1,0 +1,37 @@
+language: c
+
+python:
+ - 2.7.10
+
+before_install:
+# packages needed for build
+ - sudo apt-get -qq update
+ - sudo apt-get install libsqlite3-0 libsqlite3-dev sqlite3
+ - sudo apt-get install libxml2 libxml2-dev
+ - sudo apt-get install libopenjpeg2 libopenjpeg-dev 
+ - sudo apt-get install libgdk-pixbuf2.0-common libgdk-pixbuf2.0-0 libgdk-pixbuf2.0-dev
+# packages needed for tests
+ - sudo apt-get install python-pip
+ - sudo apt-get install python-yaml
+# - sudo apt-get install python-requests
+ - sudo apt-get install xdelta3
+ - sudo apt-get install libjpeg-turbo-progs
+
+install:
+# install JPEGXR library
+ - git clone https://git01.codeplex.com/jxrlib
+ - pushd jxrlib && sudo SHARED=1 make install && popd
+ - pushd /usr/lib && sudo ln -s /usr/lib/jxrlib-1.1/lib/*.so ./ && popd
+ - pushd /usr/lib/pkgconfig && sudo ln -s /usr/lib/jxrlib-1.1/lib/pkgconfig/* ./ && popd
+# pyhton install for tests
+ - sudo pip install --upgrade pip
+ - sudo pip install -I requests==2.2.1
+
+script:
+ - libtoolize --force && aclocal && autoheader && automake --force-missing --add-missing && autoconf
+ - ./configure --prefix=${PWD}/openslide-master-Ubuntu-14.04-x86_64-release
+ - make install
+ - make test/driver
+ - test/driver run aperio-small-region
+
+

@@ -42,7 +42,7 @@ from urlparse import urljoin
 import yaml
 from zipfile import ZipFile
 
-TESTDATA_URL = 'http://openslide.cs.cmu.edu/download/openslide-testdata/'
+TESTDATA_URL = [ 'http://openslide.cs.cmu.edu/download/openslide-testdata/' ]
 VALGRIND_SUPPRESSIONS = '!!SRCDIR!!/valgrind.supp'
 CASEROOT = '!!SRCDIR!!/cases'
 SLIDELIST = '!!SRCDIR!!/cases/slides.yaml'
@@ -299,7 +299,6 @@ def _fetch_one(slide):
         raise ValueError('%s not in %s' % (slide, SLIDELIST))
 
     filename = os.path.basename(slide)
-    url = urljoin(TESTDATA_URL, slide)
     is_zip = os.path.splitext(filename)[1] == '.zip'
 
     os.makedirs(destpath)
@@ -310,17 +309,25 @@ def _fetch_one(slide):
             dest = open(os.path.join(destpath, filename), 'wb')
 
         with dest:
-            for retries_remaining in range(4, -1, -1):
-                try:
-                    digest = _download(url, slide, dest)
-                except ConnectionInterrupted:
-                    if retries_remaining == 0:
-                        raise
+            download_successfull = False
+            
+            for baseurl in TESTDATA_URL:
+                url = urljoin(baseurl, slide)
+                for retries_remaining in range(4, -1, -1):
+                    try:
+                        digest = _download(url, slide, dest)
+                    except ConnectionInterrupted:
+                        if retries_remaining == 0:
+                            raise
+                        else:
+                            print 'Retrying...'
+                            dest.seek(0)
+                            dest.truncate()
                     else:
-                        print 'Retrying...'
-                        dest.seek(0)
-                        dest.truncate()
-                else:
+                        download_successfull = True
+                        break
+                
+                if download_successfull:
                     break
 
             if digest != slides[slide]:
