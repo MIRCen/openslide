@@ -77,8 +77,10 @@ static void write_png(openslide_t *osr, FILE *f,
     fail("Error writing PNG");
   }
 
+#ifdef PNG_STDIO_SUPPORTED
   png_init_io(png_ptr, f);
-
+#endif
+  
   png_set_IHDR(png_ptr, info_ptr, w, h, 8,
 	       PNG_COLOR_TYPE_RGB_ALPHA, PNG_INTERLACE_NONE,
 	       PNG_COMPRESSION_TYPE_DEFAULT,
