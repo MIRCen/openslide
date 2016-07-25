@@ -52,13 +52,13 @@ endif
 # Update sources for compatibility
 src_libopenslide_la_SOURCES += src/openslide-compatibility.c
 
-EXTRA_PROGRAMS = src/make-tables
-CLEANFILES = src/make-tables
+EXTRA_PROGRAMS = src/make-tables$(EXEEXT)
+CLEANFILES = src/make-tables$(EXEEXT)
 MAINTAINERCLEANFILES = src/openslide-tables.c
 # Depending directly on src/make-tables causes needless regeneration of
 # openslide-tables.c.  As the lesser of evils, recursively invoke make.
 src/openslide-tables.c: src/make-tables.c
-	@$(MAKE) $(AM_MAKEFLAGS) src/make-tables
+	@$(MAKE) $(AM_MAKEFLAGS) src/make-tables$(EXEEXT)
 	$(AM_V_GEN)src/make-tables$(EXEEXT) "$@"
 
 if WINDOWS_RESOURCES
