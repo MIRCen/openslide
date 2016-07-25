@@ -12,7 +12,7 @@ ACLOCAL_AMFLAGS=-I m4
 
 lib_LTLIBRARIES = src/libopenslide.la
 
-src_libopenslide_la_LIBADD = $(GLIB2_LIBS) $(CAIRO_LIBS) $(SQLITE3_LIBS) \
+src_libopenslide_la_LIBADD = $(GLIB2_LIBS) $(GIO2_WINDOWS_LIBS) $(CAIRO_LIBS) $(SQLITE3_LIBS) \
 	$(LIBXML2_LIBS) $(OPENJPEG_LIBS) $(LIBTIFF_LIBS) $(LIBPNG_LIBS) \
 	$(GDKPIXBUF_LIBS) $(ZLIB_LIBS) $(LIBJXR_LIBS)
 
@@ -70,7 +70,7 @@ endif
 	$(AM_V_GEN)$(LIBTOOL) $(AM_V_lt) $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --tag=RC --mode=compile $(RC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) -i "$<" -o "$@"
 
 src_libopenslide_la_CPPFLAGS = -pedantic -D_OPENSLIDE_BUILDING_DLL \
-	$(GLIB2_CFLAGS) $(CAIRO_CFLAGS) $(SQLITE3_CFLAGS) $(LIBXML2_CFLAGS) \
+	$(GLIB2_CFLAGS) $(GIO2_WINDOWS_CFLAGS) $(CAIRO_CFLAGS) $(SQLITE3_CFLAGS) $(LIBXML2_CFLAGS) \
 	$(OPENJPEG_CFLAGS) $(LIBTIFF_CFLAGS) $(LIBPNG_CFLAGS) \
 	$(GDKPIXBUF_CFLAGS) $(ZLIB_CFLAGS) $(LIBJXR_CFLAGS) -DG_LOG_DOMAIN=\"Openslide\" \
 	-I$(top_srcdir)/src
@@ -108,8 +108,8 @@ common_libopenslide_common_a_SOURCES = \
 	common/openslide-common-fail.c \
 	common/openslide-common-fd.c
 
-COMMON_CPPFLAGS = $(GLIB2_CFLAGS) $(SQLITE3_CFLAGS) $(LIBJXR_CFLAGS) -I$(top_srcdir)/src -I$(top_srcdir)/common
-COMMON_LDADD = common/libopenslide-common.a src/libopenslide.la $(GLIB2_LIBS) $(SQLITE3_LIBS) $(LIBJXR_LIBS)
+COMMON_CPPFLAGS = $(GLIB2_CFLAGS) $(GIO2_WINDOWS_CFLAGS) $(SQLITE3_CFLAGS) $(LIBJXR_CFLAGS) -I$(top_srcdir)/src -I$(top_srcdir)/common
+COMMON_LDADD = common/libopenslide-common.a src/libopenslide.la $(GLIB2_LIBS) $(GIO2_WINDOWS_LIBS) $(SQLITE3_LIBS) $(LIBJXR_LIBS)
 
 
 # test

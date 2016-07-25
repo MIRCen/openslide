@@ -122,8 +122,14 @@ CFLAGS="$old_CFLAGS"
 
 ## HACK: glib 2.12
 PKG_CHECK_MODULES(GLIB2, [ glib-2.0 >= 2.12, gthread-2.0 >= 2.12 ])
+PKG_CHECK_MODULES(GIO2_WINDOWS, [ gio-windows-2.0 >= 2.12 ], [
+  dnl This is the HAVE_GIO2_WINDOWS autoconf output variable
+  AC_DEFINE([HAVE_GIO2_WINDOWS], [1], [Define to 1 if you have GIO2_WINDOWS >= 2.12])
+  dnl This is the HAVE_GIO2_WINDOWS autoconf internal variable
+  HAVE_GIO2_WINDOWS=1
+], [:] )
 old_LIBS="$LIBS"
-LIBS="$GLIB2_LIBS $LIBS"
+LIBS="$GLIB2_LIBS $GIO2_WINDOWS_LIBS $LIBS"
 AC_CHECK_FUNCS([g_option_context_get_help])
 LIBS="$old_LIBS"
 ##
