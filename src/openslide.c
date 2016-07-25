@@ -629,20 +629,20 @@ void openslide_read_region(openslide_t *osr,
       // paint
       if (!read_region(osr, cr, sx, sy, level, sw, sh, &tmp_err)) {
         cairo_destroy(cr);
-        goto OUT;
+        goto OPENSLIDE_LABEL_OUT;
       }
 
       // done
       if (!_openslide_check_cairo_status(cr, &tmp_err)) {
         cairo_destroy(cr);
-        goto OUT;
+        goto OPENSLIDE_LABEL_OUT;
       }
 
       cairo_destroy(cr);
     }
   }
 
-OUT:
+OPENSLIDE_LABEL_OUT:
   if (tmp_err) {
     _openslide_propagate_error(osr, tmp_err);
     if (dest) {
