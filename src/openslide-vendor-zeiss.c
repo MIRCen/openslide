@@ -66,6 +66,7 @@
 #define CZI_DISPLAY_INDENT          2
 //#define CZI_DEBUG_STRUCTURE         1
 //#define CZI_DEBUG                   1
+//#define CZI_DEBUG_NO_CACHE          1
 //#define CZI_WRITE_TILE_DATA         1
 //#define CZI_WRITE_XML               1
 
@@ -219,8 +220,10 @@ static bool _openslide_czi_has_data_lzw( _openslide_czi * czi );
 static bool _openslide_czi_has_data_cameraspec( _openslide_czi * czi );
 static bool _openslide_czi_has_data_systemspec( _openslide_czi * czi );
 
-// Tiles
+// Roi
 static int32_t            _openslide_czi_get_roi_count( _openslide_czi * czi ) G_GNUC_UNUSED;
+
+// Level
 static int32_t            _openslide_czi_get_level_count( _openslide_czi * czi );
 static int32_t            _openslide_czi_get_level_subsampling( _openslide_czi * czi, int32_t level, GError **err );
 static bool               _openslide_czi_get_level_offset( _openslide_czi * czi, int32_t level, int32_t * x, int32_t * y, GError ** err );
@@ -230,14 +233,20 @@ static bool               _openslide_czi_get_level_tile_size( _openslide_czi * c
 static uint8_t *          _openslide_czi_get_level_tile_data( _openslide_czi * czi, int32_t level, int64_t uid, int32_t * buffer_size, GError **err );
 static GList   *          _openslide_czi_get_level_tiles( _openslide_czi * czi, int32_t level, GError **err );
 static bool               _openslide_czi_free_level_tile_data( _openslide_czi * czi, int32_t level, int64_t uid, GError **err );
+
+
+// Tile
+static int64_t            _openslide_czi_generate_tile_uid( _openslide_czi * czi, int32_t x, int32_t y );
 static void               _openslide_czi_free_list_tiles( GList * list );
 static uint8_t *          _openslide_czi_uncompress_tile( struct _openslide_czi_tile_descriptor * tile_desc, uint8_t * data, int32_t data_size, int32_t * uncompressed_data_size, GError ** err);
 static uint8_t *          _openslide_czi_load_tile( _openslide_czi * czi, int32_t level, int64_t uid, int32_t * buffer_size, GError **err );
-/*TODO*/static uint8_t *          _openslide_czi_load_attachment( _openslide_czi * czi, int32_t level, int64_t uid, int32_t * buffer_size, GError **err ) G_GNUC_UNUSED;
 static uint8_t *          _openslide_czi_data_convert_to_rgba32( enum czi_pixel_t pixel_type, uint8_t * tile_data, int32_t tile_data_size, int32_t * converted_tile_data_size, GError ** err);
 static uint8_t            _openslide_czi_pixel_type_size( enum czi_pixel_t );
 static uint8_t            _openslide_czi_pixel_type_channel_count( enum czi_pixel_t type );
 static bool               _openslide_czi_destroy_tile( _openslide_czi * czi, int32_t level, int64_t uid, GError **err ) G_GNUC_UNUSED;
+
+// Attachment
+/*TODO*/static uint8_t *          _openslide_czi_load_attachment( _openslide_czi * czi, int32_t level, int64_t uid, int32_t * buffer_size, GError **err ) G_GNUC_UNUSED;
 
 // Metadata
 // There is one metadata block per file. In the multi-file case, I guess
@@ -356,6 +365,7 @@ struct _czi {
   GPtrArray   * metadata;                           // struct _czi_metadata
   GHashTable  * attachments;                        // key: guid - value: struct _czi_attachment
   GHashTable  * grids;                              // key: downsample - value: openslide_grid
+  GHashTable  * tileuid_counts;                     // key: guid - value: int32_t
 
 #ifdef CZI_DEBUG
   GHashTable  * tileread_counts;                    // key: guid - value: int64_t
@@ -1895,21 +1905,26 @@ struct _czi * czi_new( GError ** err )
                         (void(*)(gpointer)) &czi_free_S64,
                         (void(*)(gpointer)) &czi_free_attachment );
   czi->grids        = g_hash_table_new_full(
-                        &g_int_hash,
-                        &g_int_equal,
-                        (void(*)(gpointer)) &czi_free_S32,
-                        (void(*)(gpointer)) &_openslide_grid_destroy );
+                            &g_int_hash,
+                            &g_int_equal,
+                            (void(*)(gpointer)) &czi_free_S32,
+                            (void(*)(gpointer)) &_openslide_grid_destroy );
+  czi->tileuid_counts  = g_hash_table_new_full(
+                            &g_int64_hash,
+                            &g_int64_equal,
+                            (void(*)(gpointer)) &czi_free_S64,
+                            (void(*)(gpointer)) &czi_free_S16 );
 #ifdef CZI_DEBUG
   czi->tileread_counts = g_hash_table_new_full(
-                        &g_int64_hash,
-                        &g_int64_equal,
-                        (void(*)(gpointer)) &czi_free_S64,
-                        (void(*)(gpointer)) &czi_free_S64 );
+                            &g_int64_hash,
+                            &g_int64_equal,
+                            (void(*)(gpointer)) &czi_free_S64,
+                            (void(*)(gpointer)) &czi_free_S64 );
   czi->tilecached_counts = g_hash_table_new_full(
-                        &g_int64_hash,
-                        &g_int64_equal,
-                        (void(*)(gpointer)) &czi_free_S64,
-                        (void(*)(gpointer)) &czi_free_S64 );
+                            &g_int64_hash,
+                            &g_int64_equal,
+                            (void(*)(gpointer)) &czi_free_S64,
+                            (void(*)(gpointer)) &czi_free_S64 );
 #endif
 
   if( !czi->sources  || ! czi->file_headers || !czi->levels ||
@@ -2106,7 +2121,6 @@ int64_t * czi_new_S64( int64_t integer, GError ** err )
   return value;
 }
 
-
 struct _openslide_czi_tile_descriptor * czi_new_tile_descriptor(
   struct _czi_tile  * tile,
   GError           ** err
@@ -2243,6 +2257,7 @@ void czi_free( struct _czi * ptr )
     if( ptr->rois )            g_ptr_array_free( ptr->rois, true );
     if( ptr->attachments )     g_hash_table_destroy( ptr->attachments );
     if( ptr->grids )           g_hash_table_destroy( ptr->grids );
+    if( ptr->tileuid_counts )  g_hash_table_destroy( ptr->tileuid_counts );
 #ifdef CZI_DEBUG
     if( ptr->tileread_counts ) {
         g_hash_table_destroy( ptr->tileread_counts );
@@ -2401,9 +2416,6 @@ bool czi_parse_directory(
   int32_t ss_x, ss_y;
   struct _czi_tile * new_tile = NULL;
   struct _czi_dimension * dim;
-  uint8_t uid[8];
-  int32_t * ptr_S32;
-  int64_t * ptr_S64;
 
   TRY_READ_ITEMS( &entry_count, 1, 4, stream, err, "Failed to parse directory: " );
   fseeko( stream, 124, SEEK_CUR );                       // 124 bytes reserved
@@ -2419,7 +2431,8 @@ bool czi_parse_directory(
     }
 
     int32_t dim_size_x, dim_stored_size_x,
-            dim_size_y, dim_stored_size_y;
+            dim_size_y, dim_stored_size_y,
+            dim_start_x, dim_start_y;
     
     dim = (struct _czi_dimension*) g_hash_table_lookup( new_tile->dimensions, "X" );
     if( !dim ) {
@@ -2428,13 +2441,11 @@ bool czi_parse_directory(
       czi_free_tile( new_tile );
       return false;
     }
+    dim_start_x = dim->start;
     dim_size_x = dim->size;
     dim_stored_size_x = dim->stored_size;    
     ss_x = dim_size_x / dim_stored_size_x;
-    ptr_S32 = (int32_t*) (uid+4);
-    *ptr_S32 = dim->start;
-    //new_tile->uid = (uint64_t)( dim->start );
-
+    
     dim = (struct _czi_dimension*) g_hash_table_lookup( new_tile->dimensions, "Y" );
     if( !dim ) {
       g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
@@ -2442,23 +2453,21 @@ bool czi_parse_directory(
       czi_free_tile( new_tile );
       return false;
     }
+    dim_start_y = dim->start;
     dim_size_y = dim->size;
     dim_stored_size_y = dim->stored_size;
     ss_y = dim_size_y / dim_stored_size_y;
-    ptr_S32 = (int32_t*) (uid);
-    *ptr_S32 = dim->start;
-    //new_tile->uid = (new_tile->uid) | ( (uint64_t)(dim->start) << 4 );
-
-    ptr_S64 = (int64_t *) uid;
-    new_tile->uid = *ptr_S64;
     
-    //g_debug("czi_parse_directory: tile %ld, "
-    //        "size [%d, %d], stored_size [%d, %d], subsambling [%d, %d]",
-    //    new_tile->uid, 
-    //    dim_size_x, dim_size_y, 
-    //    dim_stored_size_x, dim_stored_size_y,
-    //    ss_x, ss_y
-    //);
+    new_tile->uid = _openslide_czi_generate_tile_uid( czi, dim_start_x, dim_start_y );
+    
+//     g_debug("czi_parse_directory: tile %ld, start[%d, %d], size [%d, %d], "
+//             "stored_size [%d, %d], subsambling [%d, %d]",
+//        new_tile->uid, 
+//        dim_start_x, dim_start_y,
+//        dim_size_x, dim_size_y, 
+//        dim_stored_size_x, dim_stored_size_y,
+//        ss_x, ss_y
+//     );
     
     if( !czi_add_tile( czi, new_tile, ss_x, ss_y, err ) ) {
       czi_free_tile( new_tile );
@@ -4682,6 +4691,58 @@ uint8_t _openslide_czi_pixel_type_channel_count( enum czi_pixel_t type ) {
   }
 }
 
+int64_t _openslide_czi_generate_tile_uid( _openslide_czi * czi, int32_t x, int32_t y ) {
+  // The x, y position of the tile does not ensure unicity so we create a new
+  // 64 bits tile uid based on:
+  // - 24 bits for x position
+  // - 24 bits for y position
+  // - 16 bits for tile count at this position
+  uint8_t uid[8];
+  uint8_t * ptr_U8;
+  int16_t * ptr_S16;
+  int64_t * ptr_S64;
+  int16_t * ptr_tileuid_count;
+//   int64_t tile_uid;
+
+  // Initializes uid to zero  
+  ptr_S64 = (int64_t*)uid;
+  *ptr_S64 = 0;
+  
+  ptr_U8 = (uint8_t*)&x;
+  
+  // g_debug("_openslide_czi_generate_tile_uid->0: x: %d, y: %d", x, y);
+  uid[0] = ptr_U8[0];
+  uid[1] = ptr_U8[1];
+  uid[2] = ptr_U8[2];
+  
+  ptr_U8 = (uint8_t*)&y;
+  uid[3] = ptr_U8[0];
+  uid[4] = ptr_U8[1];
+  uid[5] = ptr_U8[2];
+  
+  ptr_tileuid_count = (int16_t *) g_hash_table_lookup( czi->tileuid_counts, (int64_t*)uid );
+  
+  if (ptr_tileuid_count) {
+      
+      (*ptr_tileuid_count)++;
+      ptr_S16 = ((int16_t*)(uid + 6));
+      (*ptr_S16) = (*ptr_tileuid_count);
+//      g_debug("_openslide_czi_generate_tile_uid->1: uid count incremented: %d", (*ptr_S16));
+  }
+  else {
+      ptr_S16 = czi_new_S16(0, NULL);
+      g_hash_table_insert( czi->tileuid_counts, czi_new_S64(*ptr_S64, NULL), ptr_S16);
+//      g_debug("_openslide_czi_generate_tile_uid->2: uid count inserted: %d", (*ptr_S16));
+  }
+  
+//  g_debug("_openslide_czi_generate_tile_uid->3: "
+//          "uid[0]: %u, uid[1]: %u, uid[2]: %u, uid[3]: %u, "
+//          "uid[4]: %u, uid[5]: %u, uid[6]: %u, uid[7]: %u", 
+//          (uint16_t)uid[0], (uint16_t)uid[1], (uint16_t)uid[2], (uint16_t)uid[3], 
+//          (uint16_t)uid[4], (uint16_t)uid[5], (uint16_t)uid[6], (uint16_t)uid[7]);
+  return *ptr_S64;
+}
+
 int32_t _openslide_czi_get_roi_count( _openslide_czi  * czi )
 {
   return czi->rois->len;
@@ -5270,6 +5331,7 @@ uint8_t * _openslide_czi_load_tile(
 
 #ifdef CZI_WRITE_TILE_DATA
   char * filename = g_strdup_printf( "tile_%d_%ld", level, tile->uid);
+  g_debug( "Writing tile %ld: %s", tile->uid, filename );
   FILE * outstream = _openslide_fopen( filename, "w+", err );
   if (outstream) {
     uint64_t len;
@@ -6504,16 +6566,16 @@ bool zeiss_set_grids( openslide_t     * osr,
     // Get tiles for the level
     GList * level_tiles = _openslide_czi_get_level_tiles(czi, l, err);
     GList * current_tile = level_tiles;
-   // g_debug( "zeiss_set_grids::list of %d tiles for level %d", g_list_length( current_tile ), l );
+    //g_debug( "zeiss_set_grids::list of %d tiles for level %d", g_list_length( current_tile ), l );
 
     // Add level tiles to the level range grid
     while( current_tile ) {
       // Check that tile intersects region
       struct _openslide_czi_tile_descriptor * tile_desc = current_tile->data;
-//       g_debug("zeiss_set_grids::tile_desc: %lf, %lf, %lf, %lf, %d, %d",
-//                 (double)tile_desc->start_x, (double)tile_desc->start_y,
-//                 (double)tile_desc->size_x, (double)tile_desc->size_y,
-//                 tile_desc->subsampling_x, tile_desc->subsampling_y);
+      //g_debug("zeiss_set_grids::tile_desc: %lf, %lf, %lf, %lf, %d, %d",
+      //          (double)tile_desc->start_x, (double)tile_desc->start_y,
+      //          (double)tile_desc->size_x, (double)tile_desc->size_y,
+      //          tile_desc->subsampling_x, tile_desc->subsampling_y);
       _openslide_grid_range_add_tile( grid,
                                       (double)(tile_desc->start_x - offset_x) / level->downsample,
                                       (double)(tile_desc->start_y - offset_y) / level->downsample,
@@ -6652,14 +6714,16 @@ bool zeiss_tileread(
 //          tile_desc->start_x,
 //          tile_desc->start_y);
 
+#ifndef CZI_DEBUG_NO_CACHE
   // Try to get tile data from cache
   struct _openslide_cache_entry *cache_entry;
   tile_data = (uint8_t *)_openslide_cache_get( osr->cache,
                                                level,
-                                               tile_desc->start_x,
-                                               tile_desc->start_y,
+                                               tile_desc->uid,
+                                               0,
                                                &cache_entry );
-
+#endif
+  
   if (!tile_data) { 
 #ifdef CZI_DEBUG
     // Increment read count for the tile
@@ -6785,6 +6849,7 @@ bool zeiss_tileread(
     tile_data = internal_tile_data;
     data_size = internal_data_size;
 
+#ifndef CZI_DEBUG_NO_CACHE
     // Put tile data in the cache
     // g_debug("Put tile %ld, level %d, x %d, y %d in cache",
     //        tile_desc->uid,
@@ -6792,9 +6857,11 @@ bool zeiss_tileread(
     //        (int32_t)tile_desc->start_x,
     //        (int32_t)tile_desc->start_y);
     _openslide_cache_put( osr->cache,
-                          level, tile_desc->start_x, tile_desc->start_y,
+                          level, tile_desc->uid, 0,
                           tile_data, data_size,
                           &cache_entry );
+#endif
+    
   }
 #ifdef CZI_DEBUG
   else {
@@ -6833,9 +6900,11 @@ bool zeiss_tileread(
   cairo_surface_destroy(surface);
   cairo_paint(cr);
 
+#ifndef CZI_DEBUG_NO_CACHE
   // Done with the cache entry, release it
   _openslide_cache_entry_unref(cache_entry);
-
+#endif
+  
   return true;
 }
 
