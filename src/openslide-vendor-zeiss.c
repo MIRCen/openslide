@@ -64,6 +64,7 @@
 //   PRIVATE DEFINES
 //============================================================================
 #define CZI_DISPLAY_INDENT          2
+//#define CZI_NO_CHECK_LEVEL          1
 //#define CZI_DEBUG_STRUCTURE         1
 //#define CZI_DEBUG                   1
 //#define CZI_DEBUG_NO_CACHE          1
@@ -222,6 +223,7 @@ static bool _openslide_czi_has_data_systemspec( _openslide_czi * czi );
 
 // Roi
 static int32_t            _openslide_czi_get_roi_count( _openslide_czi * czi ) G_GNUC_UNUSED;
+static GList *            _openslide_czi_roi_tile_next( GList * start_tile, int32_t roi_x, int32_t roi_y, int32_t roi_w, int32_t roi_h, GError ** err);
 
 // Level
 static int32_t            _openslide_czi_get_level_count( _openslide_czi * czi );
@@ -267,6 +269,8 @@ static bool      _openslide_czi_destroy_metadata( _openslide_czi * czi, int32_t 
 /*TODO*/static _openslide_czi * _openslide_czi_decode_slide_preview( _openslide_czi * czi, GError **err ) G_GNUC_UNUSED;
 
 // Openslide utils
+static bool      _openslide_in_bounding_box(double x, double y, double b_x, double b_y, double b_w, double b_h);
+static bool      _openslide_has_intersection(double x1, double y1, double w1, double h1, double x2, double y2, double w2, double h2);
 static int32_t   _openslide_get_level_index( openslide_t * osr, struct _openslide_level * level );
 static bool      _openslide_get_resolution( openslide_t * osr, double * mppx, double * mppy, GError **err ) G_GNUC_UNUSED;
 
@@ -4702,7 +4706,6 @@ int64_t _openslide_czi_generate_tile_uid( _openslide_czi * czi, int32_t x, int32
   int16_t * ptr_S16;
   int64_t * ptr_S64;
   int16_t * ptr_tileuid_count;
-//   int64_t tile_uid;
 
   // Initializes uid to zero  
   ptr_S64 = (int64_t*)uid;
@@ -4863,6 +4866,32 @@ bool _openslide_czi_get_level_offset(
   }
 
   return true;
+}
+
+// Check that a coordinate is in a bounding box
+bool _openslide_in_bounding_box(double x, double y, 
+                                double b_x, double b_y, 
+                                double b_w, double b_h)
+{
+  return ((x > b_x) && (x < (b_x + b_w))
+       && (y > b_y) && (y < (b_y + b_h)));
+}
+
+// Check that 2 bounding boxes have a common intersection
+bool _openslide_has_intersection(double x1, double y1, double w1, double h1, 
+                                 double x2, double y2, double w2, double h2)
+{
+//   g_debug("_openslide_has_intersection: b1 [x: %lf, y: %lf, w: %lf, h: %lf ], "
+//                                        "b2 [x: %lf, y: %lf, w: %lf, h: %lf ]", 
+//                                         x1, y1, w1, h1, x2, y2, w2, h2);
+  return (_openslide_in_bounding_box(x1, y1, x2, y2, w2, h2)
+       || _openslide_in_bounding_box(x1 + w1, y1, x2, y2, w2, h2)
+       || _openslide_in_bounding_box(x1, y1 + h1, x2, y2, w2, h2)
+       || _openslide_in_bounding_box(x1 + w1, y1 + h1, x2, y2, w2, h2)
+       || _openslide_in_bounding_box(x2, y2, x1, y1, w1, h1)
+       || _openslide_in_bounding_box(x2 + w2, y2, x1, y1, w1, h1)
+       || _openslide_in_bounding_box(x2, y2 + h2, x1, y1, w1, h1)
+       || _openslide_in_bounding_box(x2 + w2, y2 + h2, x1, y1, w1, h1));
 }
 
 // Get the maximum width and height for tiles of a level
@@ -5669,6 +5698,7 @@ static void zeiss_debug_display_tile_counts( openslide_t * osr, GHashTable * til
 #endif
 static bool zeiss_check( _openslide_czi * czi, GError ** err );
 static bool zeiss_set_properties( openslide_t * osr, _openslide_czi * czi, GError ** err );
+static bool zeiss_check_level( openslide_t * osr, _openslide_czi * czi, int32_t level, GError ** err);
 static bool zeiss_set_levels( openslide_t * osr, _openslide_czi * czi, GError ** err );
 static bool zeiss_set_rois( openslide_t * osr, _openslide_czi * czi, GError ** err ) G_GNUC_UNUSED;
 static bool zeiss_set_grids( openslide_t * osr, _openslide_czi * czi, GError ** err );
@@ -5676,7 +5706,6 @@ static bool zeiss_set_grids( openslide_t * osr, _openslide_czi * czi, GError ** 
 //============================================================================
 //   ZEISS PROPERTIES
 //============================================================================
-
 #define ZEISS_IMAGESIZE_X      "zeiss.information.image.size-x"
 #define ZEISS_IMAGESIZE_Y      "zeiss.information.image.size-y"
 #define ZEISS_IMAGESIZE_C      "zeiss.information.image.size-c"
@@ -5725,6 +5754,8 @@ static bool zeiss_set_grids( openslide_t * osr, _openslide_czi * czi, GError ** 
 #define ZEISS_COMP_JPEGXR      "zeiss.information.image.compressions.has-jpegxr-tiles"
 #define ZEISS_COMP_CAMSPEC     "zeiss.information.image.compressions.has-camera-specific-tiles"
 #define ZEISS_COMP_SYSSPEC     "zeiss.information.image.compressions.has-system-specific-tiles"
+
+#define ZEISS_LVL_CONSISTENCY  "zeiss.information.level[%d].consistency"
 
 #define ZEISS_OBJ_COUNT        "zeiss.information.instrument.objective-count"
 #define ZEISS_OBJ_NAME         "zeiss.information.instrument.objective[%d].objective-name"
@@ -5781,7 +5812,7 @@ static bool zeiss_set_grids( openslide_t * osr, _openslide_czi * czi, GError ** 
   ZEISS_GET_FORMATTED_PROP( osr, property"%s", property_value, "" );                  \
   (void)0
 
-
+  
 //============================================================================
 //   TEMPORARY HELP: FORMAT-SPECIFIC KEYS
 //============================================================================
@@ -6107,7 +6138,6 @@ bool zeiss_set_properties(
   // Get offset in pixels
   int32_t ox = 0, oy = 0;
   _openslide_czi_get_level_offset(czi, 0, &ox, &oy, err);
-  
   g_hash_table_insert(osr->properties, 
                       g_strdup(ZEISS_IMAGEOFFSET_X),
                       _openslide_format_double(mppx * ox));
@@ -6313,6 +6343,31 @@ bool zeiss_set_properties(
   xmlFreeDoc( xml_doc );
   xmlXPathFreeContext( xml_path_context );
 
+  // Information / Levels
+#ifndef CZI_NO_CHECK_LEVEL
+  int32_t level_count = _openslide_czi_get_level_count( czi );
+  bool level_consistent = false;
+  
+  // Check consistency of each level in the pyramid from the lowest resolution
+  // to the highest resolution. A level is consistent if all ROIs contain at
+  // least one tile to store image information, otherwise level is not 
+  // considered to be consistent. This allow to deal with the CZI format issue
+  // where tile are removed if their sizes are not enough large.
+  for( int32_t i = level_count - 1; i >= 0; --i )
+  {
+    if(level_consistent || zeiss_check_level(osr, czi, i, err))
+    {
+      level_consistent = true;
+    }
+    g_hash_table_insert(osr->properties, 
+                        g_strdup_printf(ZEISS_LVL_CONSISTENCY, i), 
+                        g_strdup(czi_boolean_t_string(level_consistent)));
+
+//     g_debug("zeiss_set_levels, level: %d/%d, consistency: %d", 
+//             i + 1, level_count, level_consistent);
+  }
+#endif
+  
   //--- set openslide properties ---------------------------------------------
   //--- parse voxel sizes ----------------------------------------------------
   g_hash_table_insert( osr->properties, g_strdup( OPENSLIDE_PROPERTY_NAME_MPP_X ), _openslide_format_double(mppx) );
@@ -6339,7 +6394,187 @@ bool zeiss_set_properties(
   return true;
 }
 
+GList * _openslide_czi_roi_tile_next(GList        * start_tile, 
+                                     int32_t        roi_x, 
+                                     int32_t        roi_y, 
+                                     int32_t        roi_w, 
+                                     int32_t        roi_h,
+                                     GError      ** err)
+{
+  GList * current_tile;
+  struct _openslide_czi_tile_descriptor *  tile;
   
+//   g_debug("_openslide_czi_roi_tile_next");
+  
+  current_tile = start_tile;
+  while( current_tile )
+  {
+    tile = (struct _openslide_czi_tile_descriptor *) current_tile->data;
+    if( !tile ) {
+      g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                   "Failed to load tile from list" );
+      return NULL;
+    }
+    else {
+
+      // Check that an intersection exists between tile and roi
+      if(_openslide_has_intersection(tile->start_x, tile->start_y, 
+                                     tile->size_x, tile->size_y,
+                                     roi_x, roi_y, roi_w, roi_h)) {
+          return current_tile;
+      }
+//       else
+//           g_debug("tile %ld (x: %d, y: %d, w:%d, h: %d) does not instersects roi (%d, %d, %d, %d)",
+//                   tile->uid,
+//                   tile->start_x, tile->start_y, tile->size_x, tile->size_y,
+//                   roi_x, roi_y, roi_w, roi_h);
+    }
+    
+    current_tile = g_list_next( current_tile );
+  }
+  
+  return NULL;
+}
+
+// Check that each scanned region contains at least one tile. According to czi 
+// format, it is possible that some regions do not have tiles in a scanned 
+// region at a specified level of the pyramid.
+bool zeiss_check_level(
+  openslide_t            * osr,
+  _openslide_czi         * czi,
+  int32_t                  level,
+  GError                ** err
+)
+{
+  //g_debug("zeiss_check_level");
+  struct _czi_level * s_level = (struct _czi_level *) g_ptr_array_index( czi->levels, level );
+  if( !s_level) {  
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "Failed to find level %d", level );
+    return false;
+  }
+  GList * keys = g_hash_table_get_keys( s_level->tiles );
+  if( !keys ) {
+    g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                 "No key in level %d", level );
+    return false;
+  }
+  g_list_free( keys );
+
+  int32_t block_count = 0;
+  int32_t roi_count = 0;
+  char *  value;
+  char ** l;
+  
+  double sx, sy;
+  //double ox, oy;
+  double roi_x, roi_y;
+  double roi_w, roi_h;
+
+  // Get image size from stored properties
+  value = g_hash_table_lookup( osr->properties, ZEISS_VOXELSIZE_X );
+  sx = _openslide_parse_double( (const char *)value ) * 1e6;
+  value = g_hash_table_lookup( osr->properties, ZEISS_VOXELSIZE_Y );  
+  sy = _openslide_parse_double( (const char *)value ) * 1e6;
+
+//   // Get image offset from stored properties
+//   value = g_hash_table_lookup( osr->properties, ZEISS_IMAGEOFFSET_X );
+//   ox = _openslide_parse_double( (const char *)value );
+//   value = g_hash_table_lookup( osr->properties, ZEISS_IMAGEOFFSET_Y );  
+//   oy = _openslide_parse_double( (const char *)value );
+                
+  // Get block count
+  ZEISS_GET_PROP( osr, ZEISS_ACQBLOCK_COUNT, value );
+  block_count = (int32_t)_openslide_parse_double( (const char *)value );
+
+  // TODO: Manage multiple block rois
+  // As it is currently not possible to select a block, a possibility may be to
+  // warn about multiple blocks but only use the first one
+  if (block_count > 1) {
+      g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                   "Unable to manage multiple acquisition blocks" );
+    return false;
+  }
+
+  // Goes through level tiles
+  GList * roi_tile, * start_tile = _openslide_czi_get_level_tiles(czi, level, err);
+ 
+  // Iterate trough acquisition blocks to check that tile cover some of part 
+  // of the roi
+  for ( int32_t b = 0; b < block_count; ++b )
+  {
+      // Rois count;
+      ZEISS_GET_FORMATTED_PROP( osr, ZEISS_TILEREGION_COUNT, value, b );
+      roi_count = (int32_t)_openslide_parse_double( (const char *)value );
+
+      for ( int32_t r = 0; r < roi_count; ++r)
+      {
+          ZEISS_GET_FORMATTED_PROP( osr, ZEISS_TILEREGION_CONTOUR, value, b, r );
+          l = g_strsplit( (const char *)value, ",", -1);
+
+          if (l[0] != NULL) {
+              roi_w = _openslide_parse_double( (const char *)l[0] );
+          }
+          else {
+              g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                          "Unable to get width for ROI" );
+              return false;
+          }
+
+          if (l[1] != NULL) {
+              roi_h = _openslide_parse_double( (const char *)l[1] );
+          }
+          else {
+              g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                          "Unable to get height for ROI" );
+              return false;
+          }
+
+          ZEISS_GET_FORMATTED_PROP( osr, ZEISS_TILEREGION_CENTER, value, b, r );
+          l = g_strsplit( (const char *)value, ",", -1);
+
+          if (l[0] != NULL) {
+              roi_x = _openslide_parse_double( (const char *)l[0] ) - (roi_w / 2);
+          }
+          else {
+              g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                          "Unable to get X coordinate for ROI" );
+              return false;
+          }
+          
+          if (l[1] != NULL) {
+              roi_y = _openslide_parse_double( (const char *)l[1] ) - (roi_h / 2);
+          }
+          else {
+              g_set_error( err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                          "Unable to get Y coordinate for ROI" );
+              return false;
+          }
+//           g_debug("zeiss_check_level: roi %d/%d, x: %lf, y: %lf, w: %lf, h:%lf, "
+//                   "sx: %lf, sy: %lf, ox: %lf, oy:%lf", 
+//                   r, roi_count, roi_x, roi_y, roi_w, roi_h, sx, sy, ox, oy);
+          roi_tile = _openslide_czi_roi_tile_next( start_tile, 
+                                                   (int32_t)(roi_x / sx), 
+                                                   (int32_t)(roi_y / sy), 
+                                                   (int32_t)(roi_w / sx), 
+                                                   (int32_t)(roi_h / sy), 
+                                                   err );
+
+          if (!roi_tile) {
+//               g_debug("No intersection found for roi %d/%d, x: %lf, y: %lf, w: %lf, h:%lf",
+//                       r, roi_count, roi_x, roi_y, roi_w, roi_h);
+              // As no tile intersecting the roi was found for the level, 
+              // the level is not consistent
+              g_list_free( start_tile );
+              return false;
+          }
+      }
+  }
+
+  g_list_free( start_tile );
+  return true;
+}
+
 bool zeiss_set_levels(
   openslide_t     * osr,
   _openslide_czi  * czi,
@@ -6356,7 +6591,7 @@ bool zeiss_set_levels(
   w = g_hash_table_lookup( osr->properties, ZEISS_IMAGESIZE_X );
   h = g_hash_table_lookup( osr->properties, ZEISS_IMAGESIZE_Y );
   
-  //g_debug("zeiss_set_levels: w [%s, %s]", w, h);
+  //g_debug("zeiss_set_levels, w: %s, h: %s", w, h);
     
   for( int32_t i = 0; i < level_count; ++i )
   {
@@ -6381,8 +6616,8 @@ bool zeiss_set_levels(
         zeiss_destroy( osr );
         return false;
       }
-      
-      // In this case, it can be a single tile image witout levels
+    
+    // In this case, it can be a single tile image witout levels
     }
     else {
       level->tile_w = (int64_t) tw;
