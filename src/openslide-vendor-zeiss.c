@@ -1539,12 +1539,22 @@ bool czi_add_tile(
       cur_start = czi_new_S32( start, err );
       if( !cur_start ) return false;
       g_hash_table_insert( level->start, g_strdup( (char*)current_key->data ), cur_start);
+      //g_debug("key: %s, cur_start: %d, cur_size: %d, start: %d, size: %d", 
+      //        (char*) current_key->data, *cur_start, *cur_size, start, size);
     } else {
       cur_start = (int32_t*) g_hash_table_lookup( level->start, (char*) current_key->data );
       cur_size  = (int32_t*) g_hash_table_lookup( level->size, (char*) current_key->data );
+      //g_debug("key: %s, cur_start: %d, cur_size: %d, start: %d, size: %d", 
+      //        (char*) current_key->data, *cur_start, *cur_size, start, size);
       // Update start and size for the level dimension
-      if( start < *cur_start ) *cur_start = start;
-      if( ( start + size - *cur_start ) > *cur_size ) *cur_size = (start + size - *cur_start);
+      if( start < *cur_start ) {
+          *cur_size = *cur_size + *cur_start - start;
+          *cur_start = start;
+      }
+      if( ( start + size - *cur_start ) > *cur_size ) 
+          *cur_size = (start + size - *cur_start);
+      //g_debug("key: %s, cur_start: %d, cur_size: %d, start: %d, size: %d", 
+      //        (char*) current_key->data, *cur_start, *cur_size, start, size);
     }
     if( !czi_update_bool_dimension( czi, ((char*)current_key->data)[0], *cur_size, err ) )
       return false;
