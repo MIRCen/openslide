@@ -509,7 +509,7 @@ static bool read_region(openslide_t *osr,
   if (_openslide_get_background_color_prop(osr, &r, &g, &b))
   {
     // Draw background using background color
-    g_debug("Drawing background using color %d, %d, %d", r, g, b);
+    //g_debug("Drawing background using color %d, %d, %d", r, g, b);
     cairo_set_source_rgba( cr, 
                            1.0 / 255 * r, 
                            1.0 / 255 * g, 
