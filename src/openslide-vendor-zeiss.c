@@ -69,7 +69,7 @@
 //#define CZI_DEBUG                   1
 //#define CZI_DEBUG_NO_CACHE          1
 //#define CZI_WRITE_TILE_DATA         1
-#define CZI_WRITE_XML               1
+//#define CZI_WRITE_XML               1
 
 // key:PARSING-TOP
 //////////////////////////////////////////////////////////////////////////////
