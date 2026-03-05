@@ -69,7 +69,7 @@
 //#define CZI_DEBUG                   1
 //#define CZI_DEBUG_NO_CACHE          1
 //#define CZI_WRITE_TILE_DATA         1
-//#define CZI_WRITE_XML               1
+#define CZI_WRITE_XML               1
 
 // key:PARSING-TOP
 //////////////////////////////////////////////////////////////////////////////
@@ -6295,15 +6295,15 @@ bool zeiss_set_properties(
   {
     ZEISS_SET_PROP( osr, xml_path_context, ZEISS_OVERLAP,
       "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d+1]"
-      "/SubDimensionSetups/RegionsSetup/SampleHolder/Overlap", i );
+      "//SubDimensionSetups/RegionsSetup/SampleHolder/Overlap", i );
     ZEISS_SET_PROP( osr, xml_path_context, ZEISS_COVERING_MODE,
       "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d+1]"
-      "/SubDimensionSetups/RegionsSetup/SampleHolder/TileRegionCoveringMode", i );
+      "//SubDimensionSetups/RegionsSetup/SampleHolder/TileRegionCoveringMode", i );
 
     int32_t region_count = 0;
     char * path = g_strdup_printf(
       "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d+1]"
-      "/SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion", i );
+      "//SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion", i );
     xml_path_object = xmlXPathEvalExpression(BAD_CAST path, xml_path_context );
     if( xml_path_object && xml_path_object->nodesetval )
       region_count = xml_path_object->nodesetval->nodeNr;
@@ -6317,35 +6317,35 @@ bool zeiss_set_properties(
     {
       ZEISS_SET_PROP( osr, xml_path_context, ZEISS_TILEREGION_CENTER,
         "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d+1]"
-        "/SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d+1]"
+        "//SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d+1]"
         "/CenterPosition", i, j );
       ZEISS_SET_PROP( osr, xml_path_context, ZEISS_TILEREGION_CONTOUR,
         "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d+1]"
-        "/SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d+1]"
+        "//SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d+1]"
         "/ContourSize", i, j );
       ZEISS_SET_PROP( osr, xml_path_context, ZEISS_TILEREGION_COLUMNS,
         "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d+1]"
-        "/SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d+1]"
+        "//SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d+1]"
         "/Columns", i, j );
       ZEISS_SET_PROP( osr, xml_path_context, ZEISS_TILEREGION_ROWS,
         "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d+1]"
-        "/SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d+1]"
+        "//SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d+1]"
         "/Rows", i, j );
       ZEISS_SET_PROP( osr, xml_path_context, ZEISS_TILEREGION_Z,
         "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d+1]"
-        "/SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d+1]"
+        "//SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d+1]"
         "/Z", i, j );
       ZEISS_SET_PROP( osr, xml_path_context, ZEISS_TILEREGION_ACQ,
         "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d+1]"
-        "/SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d+1]"
+        "//SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d+1]"
         "/IsUsedForAcquisition", i, j );
       ZEISS_SET_PROP( osr, xml_path_context, ZEISS_TILEREGION_PROTECT,
         "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d+1]"
-        "/SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d+1]"
+        "//SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d+1]"
         "/IsProtected", i, j );
       ZEISS_SET_PROP( osr, xml_path_context, ZEISS_TILEREGION_CTYPE,
         "/ImageDocument/Metadata/Experiment/ExperimentBlocks/AcquisitionBlock[%d+1]"
-        "/SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d+1]"
+        "//SubDimensionSetups/RegionsSetup/SampleHolder/TileRegions/TileRegion[%d+1]"
         "/Contour/@Type", i, j );
     }
   }
