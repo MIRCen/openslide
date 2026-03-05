@@ -1,0 +1,37 @@
+[workspace]
+authors = ["Nicolas Souedet <nicolas.souedet@cea.fr>"]
+channels = ["conda-forge", "https://brainvisa.info/neuro-forge"]
+name = "openslide"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[activation.env]
+PKG_CONFIG_PATH="$CONDA_PREFIX/lib/pkgconfig"
+
+[dependencies]
+sysroot_linux-64 = "2.17.*"
+git = "*"
+gcc = "<15"
+pkg-config = "*"
+autoconf = "*"
+automake = "*"
+libtool = "*"
+make = "*"
+zlib = "*"
+xorg-kbproto = "*"
+xorg-renderproto = "*"
+xorg-xproto = "*"
+xorg-xextproto = "*"
+openjpeg = "*"
+jxrlib-dev = "*"
+cairo = "*"
+libpng = "*"
+libtiff = "*"
+expat = "*"
+gdk-pixbuf = "*"
+liblzma-devel = "*"
+libxml2 = "<2.14.0"
+glib = "*"
+
+[tasks.compile] 
+cmd = "autoreconf -i && ./configure --prefix=$CONDA_PREFIX && make -j8 && make install"
