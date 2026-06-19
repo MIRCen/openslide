@@ -33,5 +33,5 @@ liblzma-devel = "*"
 libxml2 = "<2.14.0"
 glib = "*"
 
-[tasks.compile] 
+[tasks.compile]
 cmd = "autoreconf -i && ./configure --prefix=$CONDA_PREFIX && make -j8 && make install"
