@@ -30,9 +30,9 @@ libtiff = "*"
 expat = "*"
 gdk-pixbuf = "*"
 liblzma-devel = "*"
-libxml2 = "<2.14.0"
+libxml2 = "*"
 glib = "*"
 meson = "*"
 
 [tasks.compile]
-cmd = "autoreconf -i && ./configure --prefix=$CONDA_PREFIX && make -j8 && make install"
+cmd = "meson setup meson_build && meson compile -C meson_build"

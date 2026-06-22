@@ -30,6 +30,7 @@
 
 #include "openslide-private.h"
 #include "openslide-decode-jpeg.h"
+#include "openslide-decode-jxr.h"
 #include "openslide-decode-xml.h"
 
 #include <glib.h>
@@ -448,6 +449,17 @@ static bool czi_read_raw(struct _openslide_file *f, int64_t pos, int64_t len,
     }
     src = decompressed_data;
     break;
+
+ case COMP_JXR:
+    // decompress
+    decompressed_data = _openslide_jxr_decompress_buffer(src, len, pixel_bytes, w, h, err);
+    if (!decompressed_data) {
+      g_prefix_error(err, "Decompressing pixel data: ");
+      return false;
+    }
+    src = decompressed_data;
+    break;
+
   default:
     g_assert_not_reached();
   }
@@ -506,6 +518,7 @@ static bool read_subblk(struct _openslide_file *f, int64_t zisraw_offset,
   case COMP_NONE:
   case COMP_ZSTD0:
   case COMP_ZSTD1:
+  case COMP_JXR:
     return czi_read_raw(f, data_pos, data_size, sb->compression, sb->pixel_type,
                         dst, sb->w, sb->h, err);
   default:
@@ -1152,6 +1165,7 @@ static bool validate_subblk(const struct czi_subblk *sb, GError **err) {
   case COMP_NONE:
   case COMP_ZSTD0:
   case COMP_ZSTD1:
+  case COMP_JXR:
     break;
   default:
     if (sb->compression >= 0 &&

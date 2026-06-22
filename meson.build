@@ -91,6 +91,9 @@ add_project_link_arguments(
   language : 'c',
 )
 
+# Add option to disable jpeg XR support
+no_jpegxr = get_option('no_jpegxr')
+
 # Functions
 foreach f : ['fseeko', 'ftello']
   if cc.has_function(f)
@@ -172,6 +175,19 @@ dicom_dep = dependency(
   default_options : ['tests=false'],
   version : '>=1.3.0',
 )
+
+if not no_jpegxr
+  jpegxr_dep = dependency(
+    'libjxr', 
+    required: true
+  )
+  if jpegxr_dep.found()
+      add_project_arguments('-DHAVE_LIBJXR', language: 'c')
+  endif
+else
+  warning('JPEGXR support: DISABLED')
+  jpegxr_dep = disabler()
+endif
 
 # Dependency checks
 if jpeg_dep.type_name() != 'internal' and not cc.has_function(

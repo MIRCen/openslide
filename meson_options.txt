@@ -16,6 +16,12 @@ option(
   description : 'Enable building documentation (requires Doxygen)',
 )
 option(
+  'no_jpegxr',
+  type : 'boolean',
+  value : false,
+  description : 'Build without jpegxr support',
+)
+option(
   '_export_internal_symbols',
   type : 'boolean',
   value : false,

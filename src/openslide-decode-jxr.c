@@ -319,11 +319,10 @@ bool _openslide_jxr_decode_buffer(const void *data,
                                   int32_t h,
                                   GError **error) {
 #ifdef HAVE_LIBJXR
-  
+
   //  JpegXr plugin today only support 24 bit BGR (3 x 8 bit) color 
   //  TODO: Add support for float (32 bit), 24 bit (3x 16 bit) color,
   //       8 bit and 16 bit greyscale
-    
   struct jxr_decoder * os_jxr_decoder = openslide_jxr_decoder_new(error);
   os_jxr_decoder->initialize(os_jxr_decoder, datalen, w, h, error);
   os_jxr_decoder->decode(os_jxr_decoder, data, dest, error);
@@ -342,3 +341,27 @@ bool _openslide_jxr_decode_buffer(const void *data,
 #endif // HAVE_LIBJXR
 
 }
+
+void *_openslide_jxr_decompress_buffer(const void *data,
+                                       uint32_t datalen,
+                                       uint64_t destlen,
+                                       int32_t w,
+                                       int32_t h,
+                                       GError **error) {
+  
+  g_autofree void *dst = g_try_malloc(destlen);
+  if (!dst) {
+    g_set_error(error, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                "Couldn't allocate %"PRId64" bytes for jpegxr decompression",
+                destlen);
+    return NULL;
+  }
+  if (!_openslide_jxr_decode_buffer(data, datalen, (uint32_t *)dst, w, h, error)) {
+    g_set_error(error, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                //"Short read while decompressing: %"PRIu64"/%"PRId64,
+                "Short read while decompressing");
+    return NULL;
+  }
+  return g_steal_pointer(&dst);
+}
+

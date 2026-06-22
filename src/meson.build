@@ -48,6 +48,7 @@ openslide_sources = files(
   'openslide-decode-dicom.c',
   'openslide-decode-jp2k.c',
   'openslide-decode-jpeg.c',
+  'openslide-decode-jxr.c',
   'openslide-decode-png.c',
   'openslide-decode-sqlite.c',
   'openslide-decode-tiff.c',
@@ -103,6 +104,7 @@ libopenslide = library(
     zlib_dep,
     zstd_dep,
     libm_dep,
+    jpegxr_dep,
   ],
   install : true,
 )

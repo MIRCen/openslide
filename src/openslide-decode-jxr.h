@@ -78,4 +78,10 @@ bool _openslide_jxr_decode_buffer(const void       * data,
                                   int32_t            h,
                                   GError          ** err);
 
+void *_openslide_jxr_decompress_buffer(const void * data,
+                                       uint32_t     datalen,
+                                       uint64_t     destlen,
+                                       int32_t      w,
+                                       int32_t      h,
+                                       GError    ** error);
 #endif
