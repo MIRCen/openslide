@@ -430,7 +430,7 @@ static bool read_le_int32_from_file_with_result(struct _openslide_file *f,
     return false;
   }
 
-  *OUTPUT = GINT32_FROM_LE(*OUTPUT);
+  *OUT = GINT32_FROM_LE(*OUT);
   //  g_debug("%d", i);
 
   return true;

@@ -32,9 +32,6 @@
 #include "openslide-private.h"
 #include "openslide-decode-jpeg.h"
 #include "openslide-decode-sqlite.h"
-#include "openslide-hash.h"
-
-#if GLIB_VERSION >= 21600 && HAVE_SQLITE3
 
 #include <glib.h>
 #include <glib-object.h>
@@ -920,21 +917,6 @@ static bool sakura_open(openslide_t *osr, const char *filename,
   osr->ops = &sakura_ops;
   
   return true;
-}
-
-#else
-
-static bool sakura_detect(const char *filename G_GNUC_UNUSED,
-                          struct _openslide_tifflike *tl G_GNUC_UNUSED, GError **err G_GNUC_UNUSED) {
-	return false;
-}
-
-static bool sakura_open(openslide_t *osr G_GNUC_UNUSED, const char *filename G_GNUC_UNUSED,
-                        struct _openslide_tifflike *tl G_GNUC_UNUSED,
-                        struct _openslide_hash *quickhash1 G_GNUC_UNUSED, GError **err) {
-  g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-              "Openslide has not been compiled with sakura support dued to old glib2 or sqlite3 libraries");
-	return false;
 }
 
 const struct _openslide_format _openslide_format_sakura = {
