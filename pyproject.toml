@@ -1,0 +1,23 @@
+# Ref: https://github.com/codespell-project/codespell#using-a-config-file
+[tool.codespell]
+check-hidden = true
+# ignore-regex = ""
+ignore-words-list = "checkin,debbugs,subtile,subtiles"
+
+[tool.mypy]
+namespace_packages = false
+python_version = "3.10"
+strict = true
+
+[tool.ruff]
+line-length = 79
+target-version = "py310"
+
+[tool.ruff.format]
+quote-style = "single"
+
+[tool.ruff.lint]
+extend-select = ["B", "C4", "FLY", "I", "RUF", "UP"]
+
+[tool.ruff.lint.isort]
+force-sort-within-sections = true

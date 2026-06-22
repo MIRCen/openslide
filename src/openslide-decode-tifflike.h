@@ -19,11 +19,9 @@
  *
  */
 
-#ifndef OPENSLIDE_OPENSLIDE_DECODE_TIFFLIKE_H_
-#define OPENSLIDE_OPENSLIDE_DECODE_TIFFLIKE_H_
+#pragma once
 
 #include "openslide-private.h"
-#include "openslide-hash.h"
 
 #include <stdio.h>
 #include <stdint.h>
@@ -37,12 +35,21 @@ struct _openslide_tifflike *_openslide_tifflike_create(const char *filename,
 
 void _openslide_tifflike_destroy(struct _openslide_tifflike *tl);
 
+typedef struct _openslide_tifflike _openslide_tifflike;
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(_openslide_tifflike, _openslide_tifflike_destroy)
+
 bool _openslide_tifflike_init_properties_and_hash(openslide_t *osr,
                                                   struct _openslide_tifflike *tl,
                                                   struct _openslide_hash *quickhash1,
                                                   int32_t lowest_resolution_level,
                                                   int32_t property_dir,
                                                   GError **err);
+
+// not included in _openslide_tifflike_init_properties_and_hash because
+// a format's resolution tags might be unreliable
+void _openslide_tifflike_set_resolution_props(openslide_t *osr,
+                                              struct _openslide_tifflike *tl,
+                                              int64_t dir);
 
 // helpful printout?
 void _openslide_tifflike_print(struct _openslide_tifflike *tl);
@@ -64,11 +71,6 @@ uint64_t _openslide_tifflike_get_uint(struct _openslide_tifflike *tl,
 const uint64_t *_openslide_tifflike_get_uints(struct _openslide_tifflike *tl,
                                               int64_t dir, int32_t tag,
                                               GError **err);
-
-// if the file was detected as NDPI, heuristically add high-order bits to
-// the specified offset
-uint64_t _openslide_tifflike_uint_fix_offset_ndpi(struct _openslide_tifflike *tl,
-                                                  int64_t dir, uint64_t offset);
 
 // TIFF_SBYTE, TIFF_SSHORT, TIFF_SLONG
 int64_t _openslide_tifflike_get_sint(struct _openslide_tifflike *tl,
@@ -99,5 +101,3 @@ const void *_openslide_tifflike_get_buffer(struct _openslide_tifflike *tl,
 // return true if directory is tiled
 bool _openslide_tifflike_is_tiled(struct _openslide_tifflike *tl,
                                   int64_t dir);
-
-#endif

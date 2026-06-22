@@ -32,6 +32,7 @@ gdk-pixbuf = "*"
 liblzma-devel = "*"
 libxml2 = "<2.14.0"
 glib = "*"
+meson = "*"
 
 [tasks.compile]
 cmd = "autoreconf -i && ./configure --prefix=$CONDA_PREFIX && make -j8 && make install"

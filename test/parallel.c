@@ -46,9 +46,8 @@ static struct tile sentinel;
 
 static void *thread_func(void *data) {
   struct state *state = data;
-  struct tile *tile;	
-  uint32_t bufsz = TILE_SIZE * TILE_SIZE * sizeof(uint32_t);
-  uint32_t *buf = g_slice_alloc(bufsz);
+  struct tile *tile;
+  g_autofree uint32_t *buf = g_new(uint32_t, TILE_SIZE * TILE_SIZE);
 
   g_async_queue_push(state->completions, &sentinel);
   while (1) {
@@ -61,7 +60,6 @@ static void *thread_func(void *data) {
     g_async_queue_push(state->completions, tile);
   }
   g_async_queue_push(state->completions, &sentinel);
-  g_slice_free1(bufsz, buf);
   return NULL;
 }
 
@@ -74,7 +72,7 @@ int main(int argc, char **argv) {
     return 2;
   }
 
-  int threads = atoi(argv[2]);
+  int threads = g_ascii_strtoll(argv[2], NULL, 10);
   if (threads < 1) {
     printf("Invalid thread count\n");
     return 1;
@@ -97,10 +95,7 @@ int main(int argc, char **argv) {
   state.jobs = g_async_queue_new();
   state.completions = g_async_queue_new();
   for (int i = 0; i < threads; i++) {
-    if (g_thread_create(thread_func, &state, FALSE, NULL) == NULL) {
-      printf("Couldn't start thread\n");
-      return 1;
-    }
+    g_thread_unref(g_thread_new("reader", thread_func, &state));
   }
 
   // wait for threads to start
@@ -113,11 +108,11 @@ int main(int argc, char **argv) {
   int priming = 5 * threads;
   int64_t w, h;
   openslide_get_level0_dimensions(state.osr, &w, &h);
-  GTimer *timer = g_timer_new();
+  g_autoptr(GTimer) timer = g_timer_new();
   for (int64_t y = 0; y < h; y += TILE_SIZE) {
     for (int64_t x = 0; x < w; x += TILE_SIZE) {
       if (priming) {
-        tile = g_slice_new(struct tile);
+        tile = g_new(struct tile, 1);
         priming--;
       } else {
         tile = g_async_queue_pop(state.completions);
@@ -139,7 +134,7 @@ int main(int argc, char **argv) {
     if (tile == &sentinel) {
       threads--;
     } else {
-      g_slice_free(struct tile, tile);
+      g_free(tile);
     }
   }
 
