@@ -1041,6 +1041,37 @@ static bool parse_xml_set_prop(openslide_t *osr, struct czi *czi,
                                           1000000.0,
                                           OPENSLIDE_PROPERTY_NAME_MPP_Y);
 
+  // background
+  const char * bg_color_hexa = (const char *) g_hash_table_lookup(osr->properties,
+                                                                  "zeiss.Information.Image.Dimensions.Channels.Channel:0.Color");
+  if (bg_color_hexa) {
+    uint8_t orig = 0;
+    size_t len = strlen(bg_color_hexa);
+    if (len > 1) {
+      if (bg_color_hexa[0] == '#' ){ 
+        // Remove starting '#' 
+        memmove(bg_color_hexa, bg_color_hexa + 1, len);
+      }
+    } 
+
+    if (strlen(bg_color_hexa) == 8)
+      orig = 2;
+    char * red = g_strndup(bg_color_hexa + orig, 2);
+    char * green = g_strndup(bg_color_hexa + orig + 2, 2);
+    char * blue = g_strndup(bg_color_hexa + orig + 4, 2);
+
+    _openslide_set_background_color_prop(
+        osr, 
+        strtol(red, NULL, 16), 
+        strtol(green, NULL, 16),
+        strtol(blue, NULL, 16)
+    );
+    
+    g_free(red);
+    g_free(green);
+    g_free(blue);
+  } 
+
   char *objective_id = g_hash_table_lookup(osr->properties,
                                            "zeiss.Information.Image.ObjectiveSettings.ObjectiveRef.Id");
   if (objective_id) {
