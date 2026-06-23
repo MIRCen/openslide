@@ -358,8 +358,7 @@ void *_openslide_jxr_decompress_buffer(const void *data,
   }
   if (!_openslide_jxr_decode_buffer(data, datalen, (uint32_t *)dst, w, h, error)) {
     g_set_error(error, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                //"Short read while decompressing: %"PRIu64"/%"PRId64,
-                "Short read while decompressing");
+                "jpegxr error while decompressing %"PRId64" bytes", destlen);
     return NULL;
   }
   return g_steal_pointer(&dst);
