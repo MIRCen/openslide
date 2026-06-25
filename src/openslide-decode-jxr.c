@@ -36,6 +36,27 @@ static ERR PKImageEncode_Create_OpenSlide(PKImageEncode** ppIE);
 static ERR ResetWS_Memory(struct WMPStream** ppWS, void* pv);
 
 //================================================================
+// PixelType_GetSize
+//================================================================
+uint32_t PixelType_GetSize(
+  int32_t pixeltype)
+{
+  switch(pixeltype){
+    case JXR_PT_GRAY8:
+      return 1;
+
+    case JXR_PT_GRAY16:
+      return 2;
+
+    case JXR_PT_BGR24:
+      return 3;
+
+    default:
+      return 0;
+  }
+}
+
+//================================================================
 // PKImageEncode_OpenSlide
 //================================================================
 ERR PKImageEncode_WritePixels_OpenSlide(
@@ -121,6 +142,7 @@ ERR ResetWS_Memory(struct WMPStream** ppWS, void* pv)
 static bool _openslide_jxr_decoder_initialize(struct jxr_decoder * decoder,
                                               uint32_t datalen,
                                               int32_t w, int32_t h,
+                                              int32_t pixeltype,
                                               GError **error) {
 #ifdef HAVE_LIBJXR // HAVE_LIBJXR
     
@@ -135,8 +157,27 @@ static bool _openslide_jxr_decoder_initialize(struct jxr_decoder * decoder,
   decoder->pConverter = NULL;
   ERR err = WMP_errSuccess;
 
-  // Get information on
-  const PKPixelFormatGUID * pxfg = &GUID_PKPixelFormat24bppBGR;
+  // Get correct pixel format GUID
+  const PKPixelFormatGUID * pxfg;
+
+  switch(pixeltype){
+    case JXR_PT_GRAY8:
+      pxfg = &GUID_PKPixelFormat8bppGray;
+      break;
+
+    case JXR_PT_GRAY16:
+      pxfg = &GUID_PKPixelFormat16bppGray;
+      break;
+
+    case JXR_PT_BGR24:
+      pxfg = &GUID_PKPixelFormat24bppBGR;
+      break;
+
+    default:
+      g_set_error(error, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+                  "JPEGXR Unsupported pixel type: %u", pixeltype);
+      return false;
+  } 
 
   decoder->PI.pGUIDPixFmt = pxfg;
   PixelFormatLookup(&(decoder->PI), LOOKUP_FORWARD);
@@ -317,14 +358,17 @@ bool _openslide_jxr_decode_buffer(const void *data,
                                   uint32_t *dest,
                                   int32_t w,
                                   int32_t h,
+                                  int32_t pixeltype,
                                   GError **error) {
 #ifdef HAVE_LIBJXR
 
-  //  JpegXr plugin today only support 24 bit BGR (3 x 8 bit) color 
-  //  TODO: Add support for float (32 bit), 24 bit (3x 16 bit) color,
-  //       8 bit and 16 bit greyscale
+  //  JpegXr plugin today only support :
+  //    - 24 bit BGR (3 x 8 bit) color 
+  //    - 8 bit greyscale
+  //    - 16 bit greyscale
+  //  TODO: Add support for float (32 bit), 24 bit (3x 16 bit) color
   struct jxr_decoder * os_jxr_decoder = openslide_jxr_decoder_new(error);
-  os_jxr_decoder->initialize(os_jxr_decoder, datalen, w, h, error);
+  os_jxr_decoder->initialize(os_jxr_decoder, datalen, w, h, pixeltype, error);
   os_jxr_decoder->decode(os_jxr_decoder, data, dest, error);
   os_jxr_decoder->finalize(os_jxr_decoder, error);
   openslide_jxr_decoder_free(os_jxr_decoder, error);
@@ -344,21 +388,30 @@ bool _openslide_jxr_decode_buffer(const void *data,
 
 void *_openslide_jxr_decompress_buffer(const void *data,
                                        uint32_t datalen,
-                                       uint64_t destlen,
                                        int32_t w,
                                        int32_t h,
+                                       int32_t pixeltype,
                                        GError **error) {
-  
+
+  uint32_t pixel_size = PixelType_GetSize(pixeltype);
+
+  if (!pixel_size) { 
+    g_set_error(error, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
+        "JPEGXR unsupported pixel type: %u", pixeltype);
+    return NULL;
+  }
+
+  uint64_t destlen = w * h * pixel_size;
   g_autofree void *dst = g_try_malloc(destlen);
   if (!dst) {
     g_set_error(error, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                "Couldn't allocate %"PRId64" bytes for jpegxr decompression",
+                "JPEGXR couldn't allocate %"PRId64" bytes for decompression",
                 destlen);
     return NULL;
   }
-  if (!_openslide_jxr_decode_buffer(data, datalen, (uint32_t *)dst, w, h, error)) {
+  if (!_openslide_jxr_decode_buffer(data, datalen, (uint32_t *)dst, w, h, pixeltype, error)) {
     g_set_error(error, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
-                "jpegxr error while decompressing %"PRId64" bytes", destlen);
+                "JPEGXR error while decompressing %"PRId64" bytes", destlen);
     return NULL;
   }
   return g_steal_pointer(&dst);

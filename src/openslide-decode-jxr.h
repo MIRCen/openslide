@@ -53,6 +53,7 @@ struct jxr_decoder {
   bool (*initialize)(struct jxr_decoder * decoder,
                      uint32_t datalen,
                      int32_t w, int32_t h,
+                     int32_t pixeltype,
                      GError **error);
   bool (*decode)(struct jxr_decoder * decoder,
                  const void *data,
@@ -62,6 +63,22 @@ struct jxr_decoder {
                    GError **error);
 };
 
+
+enum pixel_type {
+  JXR_PT_GRAY8 = 0,
+  JXR_PT_GRAY16 = 1,
+  // JXR_PT_GRAY32FLOAT = 2,
+  JXR_PT_BGR24 = 3,
+  // JXR_PT_BGR48 = 4,
+  // JXR_PT_BGR96FLOAT = 8,
+  // JXR_PT_BGRA32,
+  // JXR_PT_GRAY64COMPLEX,
+  // JXR_PT_BGR192COMPLEX,
+  // JXR_PT_GRAY32,
+  // JXR_PT_GRAY64,
+};
+
+uint32_t PixelType_GetSize(int32_t pixeltype);
 
 struct jxr_decoder * openslide_jxr_decoder_new(GError ** error);
 
@@ -76,12 +93,13 @@ bool _openslide_jxr_decode_buffer(const void       * data,
                                   uint32_t         * dest,
                                   int32_t            w,
                                   int32_t            h,
+                                  int32_t            pixeltype,
                                   GError          ** err);
 
 void *_openslide_jxr_decompress_buffer(const void * data,
                                        uint32_t     datalen,
-                                       uint64_t     destlen,
                                        int32_t      w,
                                        int32_t      h,
+                                       int32_t      pixeltype,
                                        GError    ** error);
 #endif
