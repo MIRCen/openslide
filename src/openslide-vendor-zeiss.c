@@ -1212,6 +1212,10 @@ static bool read_scenes_set_prop(openslide_t *osr, struct czi *czi,
   }
 
   // walk scenes, add properties and compute common downsample
+  g_hash_table_insert(osr->properties,
+        g_strdup(_OPENSLIDE_PROPERTY_NAME_REGION_COUNT),
+        g_strdup_printf("%d", czi->nscene));
+  
   for (int i = 0; i < czi->nscene; i++) {
     if (!max_downsample[i]) {
       g_set_error(err, OPENSLIDE_ERROR, OPENSLIDE_ERROR_FAILED,
