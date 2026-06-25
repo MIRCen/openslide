@@ -451,6 +451,7 @@ void _openslide_performance_warn_once(gint *warned_flag,
 #define _OPENSLIDE_PROPERTY_NAME_TEMPLATE_LEVEL_DOWNSAMPLE "openslide.level[%d].downsample"
 #define _OPENSLIDE_PROPERTY_NAME_TEMPLATE_LEVEL_TILE_WIDTH "openslide.level[%d].tile-width"
 #define _OPENSLIDE_PROPERTY_NAME_TEMPLATE_LEVEL_TILE_HEIGHT "openslide.level[%d].tile-height"
+#define _OPENSLIDE_PROPERTY_NAME_REGION_COUNT "openslide.region-count"
 #define _OPENSLIDE_PROPERTY_NAME_TEMPLATE_REGION_X "openslide.region[%d].x"
 #define _OPENSLIDE_PROPERTY_NAME_TEMPLATE_REGION_Y "openslide.region[%d].y"
 #define _OPENSLIDE_PROPERTY_NAME_TEMPLATE_REGION_WIDTH "openslide.region[%d].width"

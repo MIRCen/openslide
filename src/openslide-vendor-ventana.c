@@ -729,6 +729,9 @@ static struct _openslide_grid *create_bif_grid(openslide_t *osr,
 
 static void set_region_props(openslide_t *osr, struct bif *bif,
                              struct level *level0) {
+  g_hash_table_insert(osr->properties,
+      g_strdup(_OPENSLIDE_PROPERTY_NAME_REGION_COUNT),
+      g_strdup_printf("%d", bif->num_areas));
   for (int32_t i = 0; i < bif->num_areas; i++) {
     struct area *area = bif->areas[i];
     g_hash_table_insert(osr->properties,

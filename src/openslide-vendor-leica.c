@@ -327,6 +327,10 @@ static void set_region_bounds_props(openslide_t *osr,
   int64_t y1 = INT64_MIN;
 
   g_assert(level0->areas->len);
+  g_hash_table_insert(osr->properties,
+      g_strdup(_OPENSLIDE_PROPERTY_NAME_REGION_COUNT),
+      g_strdup_printf("%d", level0->areas->len));
+      
   for (uint32_t n = 0; n < level0->areas->len; n++) {
     struct area *area = level0->areas->pdata[n];
     g_hash_table_insert(osr->properties,
