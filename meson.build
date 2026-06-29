@@ -293,3 +293,20 @@ configure_file(
   output : 'config.h',
   configuration : conf,
 )
+
+# Generate .pc file
+pc_conf = configuration_data()
+pc_conf.set('prefix', get_option('prefix'))
+pc_conf.set('exec_prefix', get_option('prefix'))
+pc_conf.set('libdir', join_paths(get_option('prefix'), get_option('libdir')))
+pc_conf.set('includedir', join_paths(get_option('prefix'), get_option('includedir')))
+pc_conf.set('PROJECT_NAME', meson.project_name())
+pc_conf.set('PROJECT_VERSION', meson.project_version())
+pc_file = configure_file(
+    input: 'openslide.pc.in',
+    output: 'openslide.pc',
+    configuration: pc_conf,
+    install: true,
+    install_dir: join_paths(get_option('libdir'), 'pkgconfig')
+)
+
