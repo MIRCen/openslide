@@ -256,6 +256,13 @@ struct czi_subblk {
   int32_t phasis_i;
 };
 
+struct czi_multi_subblk {
+  int32_t x, y, z;
+  uint32_t w, h;
+  int64_t downsample_i;
+  GPtrArray *subblk; 
+};
+
 struct czi {
   uint8_t primary_file_guid[CZI_GUID_LEN];
   uint8_t file_guid[CZI_GUID_LEN];
@@ -272,7 +279,7 @@ struct czi {
   int32_t nscene;
   int32_t nsubblk; // total number of subblocks
   struct czi_subblk *subblks;
-  GHashTable * multi_subblks; // subblks per channel
+  GPtrArray *multi_subblks; // subblks per channel
 };
 
 struct associated_image {
@@ -301,14 +308,6 @@ struct subblk_coord {
   int32_t z;
   int32_t downsample_i;
 } __attribute__((packed));
-
-static guint64 array_hash(const int32_t * coords, uint32_t n) {
-    guint64 hash = 0;
-    for (uint32_t i = 0; i < n; i++) {
-        hash = hash * 63 + (guint64)coords[i];
-    }
-    return hash;
-}
 
 static void destroy_level(struct level *l) {
   _openslide_grid_destroy(l->grid);
@@ -382,12 +381,13 @@ static void bgr48_to_argb32(uint8_t *src, size_t src_len, uint32_t *dst, uint8_t
 }
 
 static void gray16_to_gray8(uint8_t *src, size_t src_len, uint32_t *dst, uint8_t dst_offset) {
-  printf("==== Converting Gray 16 bits to Gray 8 bits, offset: %d\n", dst_offset);
-  fflush(stdout);
+  // printf("==== Converting Gray 16 bits to Gray 8 bits, offset: %d\n", dst_offset);
+  // fflush(stdout);
 
   for (size_t i = 0; i < src_len; i += 2, src += 2) {
-    *dst++ = ((0xFF000000 | 
+    *dst = ((0xFF000000 | (*dst) |  
                         (((uint32_t)src[1]) << (dst_offset * 8))));
+    dst++;
   }
 } 
 
@@ -530,12 +530,13 @@ static bool czi_read_raw(struct _openslide_file *f, int64_t pos, int64_t len,
   }
 
   // convert pixels to ARGB
-  printf("==== Decompressed data size %ld\n", pixel_bytes);
-  printf("==== Convert data %d x %d, channel %d\n", w, h, channel);
-  fflush(stdout);
+  // printf("==== Decompressed data size %ld\n", pixel_bytes);
+  // printf("==== Convert data %d x %d, channel %d\n", w, h, channel);
+  // fflush(stdout);
   convert(src, pixel_bytes, dst, channel);
-  printf("==== Data %d x %d, channel %d converted\n", w, h, channel);
-  fflush(stdout);
+  // printf("==== Data %d x %d, channel %d converted\n", w, h, channel);
+  // fflush(stdout);
+
   return true;
 }
 
@@ -543,7 +544,6 @@ static bool czi_read_raw(struct _openslide_file *f, int64_t pos, int64_t len,
 // dst must be sb->w * sb->h * 4 bytes
 static bool read_subblk(struct _openslide_file *f, int64_t zisraw_offset,
                         struct czi_subblk *sb, uint32_t *dst, GError **err) {
-  printf("==== READ_SUBBLK\n");
   struct zisraw_subblk_hdr hdr;
   if (!freadn_to_buf(f, zisraw_offset + sb->file_pos,
                      &hdr, sizeof(hdr), err)) {
@@ -577,27 +577,33 @@ static bool read_tile(openslide_t *osr, cairo_t *cr,
   struct zeiss_ops_data *data = osr->data;
   struct czi *czi = data->czi;
   struct _openslide_file *f = arg;
-  struct czi_subblk *sb = tile_data;
+  struct czi_multi_subblk *msb = tile_data;
   
   g_autoptr(_openslide_cache_entry) cache_entry = NULL;
   uint32_t *tiledata = _openslide_cache_get(osr->cache, level, tid, 0,
                                             &cache_entry);
   if (!tiledata) {
-    printf("==== read_tile: id: %ld, x: %d, y: %d, z: %d, allocating %ld bytes\n", tid, sb->x, sb->y, sb->z, ((uint64_t)4) * sb->w * sb->h);
+    // printf("==== read_tile: id: %ld, x: %d, y: %d, z: %d, allocating %ld bytes\n", tid, msb->x, msb->y, msb->z, ((uint64_t)4) * msb->w * msb->h);
+    // fflush(stdout);
 
-    g_autofree uint32_t *buf = g_new(uint32_t, sb->w * sb->h);
-    if (!read_subblk(f, czi->zisraw_offset, sb, buf, err)) {
-      return false;
+    // Read each sub block
+    g_autofree uint32_t *buf = g_new0(uint32_t, msb->w * msb->h);
+    int32_t nsubblks = msb->subblk->len;
+    for (int32_t i = 0; i < nsubblks; ++i) {
+      struct czi_subblk *sb = msb->subblk->pdata[i];
+      if (!read_subblk(f, czi->zisraw_offset, sb, buf, err)) {
+        return false;
+      }
     }
     tiledata = g_steal_pointer(&buf);
     _openslide_cache_put(osr->cache, level, tid, 0, tiledata,
-                         sb->w * sb->h * 4, &cache_entry);
+                         msb->w * msb->h * 4, &cache_entry);
   }
 
   g_autoptr(cairo_surface_t) surface =
     cairo_image_surface_create_for_data((unsigned char *) tiledata,
                                         CAIRO_FORMAT_ARGB32,
-                                        sb->w, sb->h, sb->w * 4);
+                                        msb->w, msb->h, msb->w * 4);
   cairo_set_source_surface(cr, surface, 0, 0);
   cairo_paint(cr);
   return true;
@@ -769,14 +775,13 @@ static bool read_dir_entry(struct czi_subblk *sb, char **p, size_t *avail,
                 "Missing X or Y dimension in directory entry");
     return false;
   }
-  printf("==== read_dir_entry - downsample: %ld, x: %d, y:%d, z: %d, channel:%d\n", sb->downsample_i, sb->x, sb->y, sb->z, sb->channel);
+  // printf("==== read_dir_entry - downsample: %ld, x: %d, y:%d, z: %d, channel:%d\n", sb->downsample_i, sb->x, sb->y, sb->z, sb->channel);
   return true;
 }
 
 /* read all data subblocks info (x, y, w, h etc.) from subblock directory */
 static bool read_subblk_dir(struct czi *czi, struct _openslide_file *f,
                             GError **err) {
-  printf("==== read_subblk_dir\n");
   int64_t offset = czi->zisraw_offset + czi->subblk_dir_pos;
   struct zisraw_subblk_dir_hdr hdr;
   if (!freadn_to_buf(f, offset, &hdr, sizeof(hdr), err)) {
@@ -865,9 +870,6 @@ static struct czi *create_czi(struct _openslide_file *f, int64_t offset,
   czi->subblk_dir_pos = GINT64_FROM_LE(hdr.subblk_dir_pos);
   czi->meta_pos = GINT64_FROM_LE(hdr.meta_pos);
   czi->att_dir_pos = GINT64_FROM_LE(hdr.att_dir_pos);
-  // czi->channels_subblks = g_hash_table_new_full(g_int32_hash, 
-  //                                               g_int32_equal, 
-  //                                               NULL, NULL);
 
   if (!read_subblk_dir(czi, f, err)) {
     return NULL;
@@ -1292,8 +1294,87 @@ static bool validate_subblk(const struct czi_subblk *sb, GError **err) {
   return true;
 }
 
+static bool validate_subblks_array(GPtrArray * subblks_array, 
+                                   uint32_t *height,
+                                   uint32_t *width) {
+  // Validate that all subblks have same heigth and width
+  int32_t n = subblks_array->len;
+  bool initialized = false;
+  *height = 0;
+  *width = 0;
+  for(int32_t i = 0; i < n; ++i) {
+    struct czi_subblk *b = subblks_array->pdata[i]; 
+    if (!initialized) {
+      *height = b->h;
+      *width = b->w;
+      initialized = true;
+    }
+
+    if ((*height != b->h) || (*width != b->w)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static bool populate_multi_subblks_array(struct czi *czi, 
+                                         GHashTable *multi_subblks_hash, 
+                                         int32_t * coord, 
+                                         int32_t depth) { 
+  // Create multi subblocks array
+  GHashTableIter iter;
+  gpointer key, value;
+
+  g_hash_table_iter_init (&iter, multi_subblks_hash);
+  while (g_hash_table_iter_next (&iter, &key, &value)) {
+    coord[depth] = *((int32_t*)key);
+    if (depth < 3) { 
+      GHashTable * parent = (GHashTable *)value;
+      populate_multi_subblks_array(czi, parent, coord, depth + 1);
+    }
+    else {
+      GPtrArray * subblks_array = (GPtrArray *)value;
+
+      uint32_t height, width;
+      if (!validate_subblks_array(subblks_array, &height, &width))
+        return false;
+
+      struct czi_multi_subblk * multi_subblks;
+      multi_subblks = g_new0(struct czi_multi_subblk, subblks_array->len);
+      multi_subblks->downsample_i = coord[0];
+      multi_subblks->x = coord[1]; 
+      multi_subblks->y = coord[2];
+      multi_subblks->z = coord[3];
+      multi_subblks->h = height;
+      multi_subblks->w = width;
+      multi_subblks->subblk = subblks_array;
+
+      g_ptr_array_add(czi->multi_subblks, multi_subblks);
+      // printf("==== Create multisubblock for level %ld, pos: (%d, %d, %d), size: (%u, %u), count: %d \n", 
+      //        multi_subblks->downsample_i, 
+      //        multi_subblks->x, multi_subblks->y, 
+      //        multi_subblks->z, multi_subblks->h, multi_subblks->w,
+      //        multi_subblks->subblk->len);
+      // fflush(stdout);
+    }  
+  }
+  return true;
+}
+
+static bool create_multi_subblks_array(struct czi *czi,
+                                       GHashTable * multi_subblks_hash) { 
+  int32_t coord[] = {0, 0, 0, 0};
+  int32_t depth = 0;
+
+  // TODO: deallocate multi_subblks
+  czi->multi_subblks = g_ptr_array_new_full(10, NULL);
+
+  return populate_multi_subblks_array(czi, multi_subblks_hash, coord, depth);
+}
+
 static bool group_multi_subblks(struct czi *czi) {
-  // czi->
+  // Group sub blocks per channel
   GHashTable * multi_subblks_hash = 
     g_hash_table_new_full(g_int64_hash, g_int64_equal, g_free, NULL);
 
@@ -1319,7 +1400,7 @@ static bool group_multi_subblks(struct czi *czi) {
     }
 
     // Final value is an array of subblocks
-    printf("== inserting block for d: %ld, x: %d, y: %d, z: %d\n", b->downsample_i, b->x, b->y, b->z);
+    // printf("== inserting block for d: %ld, x: %d, y: %d, z: %d\n", b->downsample_i, b->x, b->y, b->z);
     coord = (int64_t)coords[3];
     GPtrArray * subblks = g_hash_table_lookup(parent_hash,  &coord);
     if (!subblks) {
@@ -1331,9 +1412,11 @@ static bool group_multi_subblks(struct czi *czi) {
     g_ptr_array_add(subblks, b);
   }
 
-  czi->multi_subblks = multi_subblks_hash;
+  if (!create_multi_subblks_array(czi, multi_subblks_hash))
+    return false;
+  
   return true;
-} 
+}
 
 static int compare_level_downsamples(const void *a, const void *b) {
   const struct level *la = *(const struct level **) a;
@@ -1359,6 +1442,10 @@ static GPtrArray *create_levels(openslide_t *osr, struct czi *czi,
     struct czi_subblk *b = &czi->subblks[i];
     if (b->downsample_i > max_downsample) {
       continue;
+    }
+
+    if (!validate_subblk(b, err)) {
+      return NULL;
     }
 
     struct level *l = g_hash_table_lookup(level_hash, &b->downsample_i);
@@ -1404,23 +1491,24 @@ static GPtrArray *create_levels(openslide_t *osr, struct czi *czi,
     MAX(DEFAULT_CACHE_SIZE, 2 * 4 * max_tile_w * max_tile_h);
   //g_debug("Default cache size: %"PRIu64, *default_cache_size_OUT);
 
+  // group subblocks per downsampling and coordinate
+  group_multi_subblks(czi);
+
   // add multi subblocks to grids
-  for (int i = 0; i < czi->nsubblk; i++) {
-    struct czi_subblk *b = &czi->subblks[i];
-    if (b->downsample_i > max_downsample) {
+  int32_t nmultisubblks = czi->multi_subblks->len;
+  for (int i = 0; i < nmultisubblks; i++) {
+    struct czi_multi_subblk *msb = czi->multi_subblks->pdata[i];
+    if (msb->downsample_i > max_downsample) {
       // subblock from a level that was omitted because not all scenes have it
       continue;
     }
-    if (!validate_subblk(b, err)) {
-      return NULL;
-    }
-
-    struct level *l = g_hash_table_lookup(level_hash, &b->downsample_i);
+    
+    struct level *l = g_hash_table_lookup(level_hash, &msb->downsample_i);
     g_assert(l);
     _openslide_grid_range_add_tile(l->grid,
-                                   (double) b->x / b->downsample_i,
-                                   (double) b->y / b->downsample_i,
-                                   b->z, b->w, b->h, b);
+                                   (double) msb->x / msb->downsample_i,
+                                   (double) msb->y / msb->downsample_i,
+                                   msb->z, msb->w, msb->h, msb);
   }
 
   // postprocess grids
@@ -1568,9 +1656,6 @@ static bool zeiss_open(openslide_t *osr, const char *filename,
   if (!read_scenes_set_prop(osr, czi, &max_downsample, err)) {
     return false;
   }
-
-  // Group multi channel sublocks
-  group_multi_subblks(czi);
 
   uint64_t default_cache_size;
   g_autoptr(GPtrArray) levels =
